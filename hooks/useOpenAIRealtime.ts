@@ -71,20 +71,23 @@ export function useOpenAIRealtime() {
     } else if (message.type === 'session.created') {
       console.log('✅ Session created successfully');
       console.log('Session details:', JSON.stringify(message, null, 2));
-      // Mark session as ready after a short delay to ensure it's fully initialized
-      setTimeout(() => {
-        sessionReadyRef.current = true;
-        console.log('✅ Session is now ready for audio');
-        // Process any pending audio
-        processPendingAudio();
-      }, 500);
+      // Don't mark as ready yet - wait for Step 2 (audio modality) to complete
+      // The session will be marked ready after session.updated from Step 2
     } else if (message.type === 'session.updated') {
       console.log('✅ Session updated successfully');
-      console.log('Session details:', JSON.stringify(message, null, 2));
-      sessionReadyRef.current = true;
-      console.log('✅ Session is now ready for audio');
-      // Process any pending audio
-      processPendingAudio();
+      const session = (message as any).session;
+      const modalities = session?.modalities || [];
+      console.log('Session modalities:', modalities);
+      
+      // Only mark as ready if audio modality is present
+      if (modalities.includes('audio')) {
+        sessionReadyRef.current = true;
+        console.log('✅ Session is now ready for audio (audio modality confirmed)');
+        // Process any pending audio
+        processPendingAudio();
+      } else {
+        console.log('⏳ Session updated but audio modality not yet added');
+      }
     } else if (message.type === 'error') {
       const errorDetails = (message as any).error;
       console.error('❌ OpenAI Realtime API error:', {
@@ -167,7 +170,7 @@ export function useOpenAIRealtime() {
             return;
           }
           
-          // Wait for session.updated confirmation before adding audio
+          // Wait for session.created confirmation before adding audio
           // We'll add audio in a separate step after confirming text works
           const addAudioTimeout = setTimeout(() => {
             if (ws.readyState === WebSocket.OPEN && wsRef.current === ws) {
@@ -185,11 +188,12 @@ export function useOpenAIRealtime() {
               
               try {
                 ws.send(JSON.stringify(audioConfig));
+                console.log('✅ Audio modality config sent, waiting for session.updated...');
               } catch (error) {
                 console.error('❌ Error adding audio config:', error);
               }
             }
-          }, 1000); // Wait 1 second for first config to be processed
+          }, 800); // Wait 800ms for session.created to be processed
           
           // Store timeout to clear if connection closes
           (ws as any)._addAudioTimeout = addAudioTimeout;
