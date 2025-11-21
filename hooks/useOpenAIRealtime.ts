@@ -26,6 +26,8 @@ export function useOpenAIRealtime() {
   const transcriptionRef = useRef<string>('');
   const responseRef = useRef<string>('');
   const updateCallbackRef = useRef<((transcription: string, response: string) => void) | null>(null);
+  const sessionReadyRef = useRef<boolean>(false);
+  const pendingAudioRef = useRef<Int16Array[]>([]);
 
   // Set callback to update UI
   const setUpdateCallback = useCallback((callback: (transcription: string, response: string) => void) => {
@@ -68,9 +70,20 @@ export function useOpenAIRealtime() {
     } else if (message.type === 'session.created') {
       console.log('✅ Session created successfully');
       console.log('Session details:', JSON.stringify(message, null, 2));
+      // Mark session as ready after a short delay to ensure it's fully initialized
+      setTimeout(() => {
+        sessionReadyRef.current = true;
+        console.log('✅ Session is now ready for audio');
+        // Process any pending audio
+        processPendingAudio();
+      }, 500);
     } else if (message.type === 'session.updated') {
       console.log('✅ Session updated successfully');
       console.log('Session details:', JSON.stringify(message, null, 2));
+      sessionReadyRef.current = true;
+      console.log('✅ Session is now ready for audio');
+      // Process any pending audio
+      processPendingAudio();
     } else if (message.type === 'error') {
       const errorDetails = (message as any).error;
       console.error('❌ OpenAI Realtime API error:', {
@@ -245,6 +258,86 @@ export function useOpenAIRealtime() {
     });
   }, [handleRealtimeMessage]);
 
+  // Send audio data to WebSocket
+  const sendAudioData = useCallback(async (ws: WebSocket, audioData: Int16Array) => {
+    // Convert Int16Array to base64
+    const buffer = new Uint8Array(audioData.buffer);
+    let binaryString = '';
+    for (let i = 0; i < buffer.length; i++) {
+      binaryString += String.fromCharCode(buffer[i]);
+    }
+    const base64Audio = btoa(binaryString);
+
+    const audioMessage = {
+      type: 'input_audio_buffer.append',
+      audio: base64Audio,
+    };
+    
+    const audioSizeKB = (base64Audio.length * 3 / 4) / 1024;
+    console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars (~${audioSizeKB.toFixed(2)} KB)`);
+    
+    if (base64Audio.length > 100000) {
+      console.warn('⚠️ Audio chunk is large, splitting might be needed');
+    }
+    
+    ws.send(JSON.stringify(audioMessage));
+    setIsProcessing(true);
+  }, []);
+
+  // Process pending audio once session is ready
+  const processPendingAudio = useCallback(async () => {
+    if (!sessionReadyRef.current || pendingAudioRef.current.length === 0) {
+      return;
+    }
+    
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    
+    console.log(`📤 Processing ${pendingAudioRef.current.length} pending audio chunks`);
+    
+    // Process all pending audio chunks
+    const chunksToProcess = [...pendingAudioRef.current];
+    pendingAudioRef.current = [];
+    
+    for (const audioData of chunksToProcess) {
+      try {
+        await sendAudioData(ws, audioData);
+        // Small delay between chunks to avoid overwhelming the server
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } catch (error) {
+        console.error('❌ Error processing pending audio:', error);
+      }
+    }
+  }, [sendAudioData]);
+
+  // Send audio data to WebSocket
+  const sendAudioData = useCallback(async (ws: WebSocket, audioData: Int16Array) => {
+    // Convert Int16Array to base64
+    const buffer = new Uint8Array(audioData.buffer);
+    let binaryString = '';
+    for (let i = 0; i < buffer.length; i++) {
+      binaryString += String.fromCharCode(buffer[i]);
+    }
+    const base64Audio = btoa(binaryString);
+
+    const audioMessage = {
+      type: 'input_audio_buffer.append',
+      audio: base64Audio,
+    };
+    
+    const audioSizeKB = (base64Audio.length * 3 / 4) / 1024;
+    console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars (~${audioSizeKB.toFixed(2)} KB)`);
+    
+    if (base64Audio.length > 100000) {
+      console.warn('⚠️ Audio chunk is large, splitting might be needed');
+    }
+    
+    ws.send(JSON.stringify(audioMessage));
+    setIsProcessing(true);
+  }, []);
+
   // Process audio with OpenAI Realtime API
   const processAudioWithAI = useCallback(async (audioData: Int16Array): Promise<AIResult | null> => {
     try {
@@ -253,54 +346,29 @@ export function useOpenAIRealtime() {
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         console.log('WebSocket not ready, initializing...');
         ws = await initWebSocket();
-        // Wait longer for session to be fully ready
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
-      // Check if session is ready (wait for session.created or session.updated)
-      // For now, we'll just proceed and let errors surface
-
-      // Convert Int16Array to base64
-      // OpenAI Realtime API expects PCM16 audio as base64-encoded string
-      // PCM16 is 16-bit signed integers (little-endian)
-      const buffer = new Uint8Array(audioData.buffer);
-      
-      // Use a more efficient base64 encoding method
-      let binaryString = '';
-      for (let i = 0; i < buffer.length; i++) {
-        binaryString += String.fromCharCode(buffer[i]);
-      }
-      const base64Audio = btoa(binaryString);
-
-      // Send audio data to OpenAI Realtime API
-      if (ws.readyState === WebSocket.OPEN) {
-        const audioMessage = {
-          type: 'input_audio_buffer.append',
-          audio: base64Audio,
-        };
-        
-        // Log audio data size for debugging
-        const audioSizeKB = (base64Audio.length * 3 / 4) / 1024; // Approximate size in KB
-        console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars (~${audioSizeKB.toFixed(2)} KB)`);
-        
-        // Check if audio data is too large (OpenAI may have limits)
-        if (base64Audio.length > 100000) { // ~75KB of audio data
-          console.warn('⚠️ Audio chunk is large, splitting might be needed');
+        // Wait for session to be ready
+        let waitCount = 0;
+        while (!sessionReadyRef.current && waitCount < 20) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          waitCount++;
         }
-        
-        try {
-          ws.send(JSON.stringify(audioMessage));
-          setIsProcessing(true);
-        } catch (error) {
-          console.error('❌ Error sending audio message:', error);
-          setIsProcessing(false);
+        if (!sessionReadyRef.current) {
+          console.warn('⚠️ Session not ready after waiting, queueing audio');
+          pendingAudioRef.current.push(audioData);
           return null;
         }
-      } else {
-        console.warn('⚠️ WebSocket not open, cannot send audio. State:', ws.readyState);
+      }
+      
+      // Check if session is ready
+      if (!sessionReadyRef.current) {
+        console.log('⏳ Session not ready yet, queueing audio...');
+        pendingAudioRef.current.push(audioData);
         return null;
       }
-
+      
+      // Session is ready, send audio
+      await sendAudioData(ws, audioData);
+      
       // Return current transcription and response
       return {
         transcription: transcriptionRef.current,
@@ -356,6 +424,8 @@ export function useOpenAIRealtime() {
     }
     transcriptionRef.current = '';
     responseRef.current = '';
+    sessionReadyRef.current = false;
+    pendingAudioRef.current = [];
     setIsProcessing(false);
   }, []);
 
