@@ -67,8 +67,10 @@ export function useOpenAIRealtime() {
       setIsProcessing(false);
     } else if (message.type === 'session.created') {
       console.log('✅ Session created successfully');
+      console.log('Session details:', JSON.stringify(message, null, 2));
     } else if (message.type === 'session.updated') {
       console.log('✅ Session updated successfully');
+      console.log('Session details:', JSON.stringify(message, null, 2));
     } else if (message.type === 'error') {
       const errorDetails = (message as any).error;
       console.error('❌ OpenAI Realtime API error:', {
@@ -130,25 +132,54 @@ export function useOpenAIRealtime() {
         // Wait a moment before sending session.update
         // Some WebSocket implementations need a brief delay
         setTimeout(() => {
-          const sessionConfig = {
+          // Try the absolute minimal configuration first
+          // Some parameters might be causing server_error
+          const minimalConfig = {
             type: 'session.update',
             session: {
-              modalities: ['text', 'audio'],
-              instructions: 'You are a helpful AI assistant. Respond naturally in conversation.',
-              voice: 'alloy',
-              input_audio_format: 'pcm16',
-              output_audio_format: 'pcm16',
-              input_audio_transcription: {
-                model: 'whisper-1',
-              },
-              temperature: 0.8,
-              max_response_output_tokens: 4096,
+              // Only set what's absolutely necessary
+              modalities: ['text'],
             },
           };
           
-          console.log('📤 Sending session.update:', JSON.stringify(sessionConfig, null, 2));
-          ws.send(JSON.stringify(sessionConfig));
-        }, 100);
+          console.log('📤 Step 1: Sending minimal session.update (text only)');
+          console.log('Config:', JSON.stringify(minimalConfig, null, 2));
+          
+          try {
+            ws.send(JSON.stringify(minimalConfig));
+          } catch (error) {
+            console.error('❌ Error sending minimal config:', error);
+            reject(error);
+            return;
+          }
+          
+          // Wait for session.updated confirmation before adding audio
+          // We'll add audio in a separate step after confirming text works
+          const addAudioTimeout = setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN && wsRef.current === ws) {
+              console.log('📤 Step 2: Adding audio modality...');
+              const audioConfig = {
+                type: 'session.update',
+                session: {
+                  modalities: ['text', 'audio'],
+                  voice: 'alloy',
+                  input_audio_format: 'pcm16',
+                  output_audio_format: 'pcm16',
+                },
+              };
+              console.log('Config:', JSON.stringify(audioConfig, null, 2));
+              
+              try {
+                ws.send(JSON.stringify(audioConfig));
+              } catch (error) {
+                console.error('❌ Error adding audio config:', error);
+              }
+            }
+          }, 1000); // Wait 1 second for first config to be processed
+          
+          // Store timeout to clear if connection closes
+          (ws as any)._addAudioTimeout = addAudioTimeout;
+        }, 300); // Increased delay to ensure connection is stable
 
         wsRef.current = ws;
         resolve(ws);
@@ -200,6 +231,10 @@ export function useOpenAIRealtime() {
 
       ws.onclose = (event) => {
         clearTimeout(connectionTimeout);
+        // Clear any pending timeouts
+        if ((ws as any)._addAudioTimeout) {
+          clearTimeout((ws as any)._addAudioTimeout);
+        }
         console.log('WebSocket closed', event.code, event.reason);
         wsRef.current = null;
         // Only reject if we haven't resolved yet
@@ -218,15 +253,24 @@ export function useOpenAIRealtime() {
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         console.log('WebSocket not ready, initializing...');
         ws = await initWebSocket();
-        // Wait a bit for session to be ready
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Wait longer for session to be fully ready
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
+      
+      // Check if session is ready (wait for session.created or session.updated)
+      // For now, we'll just proceed and let errors surface
 
       // Convert Int16Array to base64
+      // OpenAI Realtime API expects PCM16 audio as base64-encoded string
+      // PCM16 is 16-bit signed integers (little-endian)
       const buffer = new Uint8Array(audioData.buffer);
-      const base64Audio = btoa(
-        String.fromCharCode(...Array.from(buffer))
-      );
+      
+      // Use a more efficient base64 encoding method
+      let binaryString = '';
+      for (let i = 0; i < buffer.length; i++) {
+        binaryString += String.fromCharCode(buffer[i]);
+      }
+      const base64Audio = btoa(binaryString);
 
       // Send audio data to OpenAI Realtime API
       if (ws.readyState === WebSocket.OPEN) {
@@ -236,10 +280,22 @@ export function useOpenAIRealtime() {
         };
         
         // Log audio data size for debugging
-        console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars`);
+        const audioSizeKB = (base64Audio.length * 3 / 4) / 1024; // Approximate size in KB
+        console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars (~${audioSizeKB.toFixed(2)} KB)`);
         
-        ws.send(JSON.stringify(audioMessage));
-        setIsProcessing(true);
+        // Check if audio data is too large (OpenAI may have limits)
+        if (base64Audio.length > 100000) { // ~75KB of audio data
+          console.warn('⚠️ Audio chunk is large, splitting might be needed');
+        }
+        
+        try {
+          ws.send(JSON.stringify(audioMessage));
+          setIsProcessing(true);
+        } catch (error) {
+          console.error('❌ Error sending audio message:', error);
+          setIsProcessing(false);
+          return null;
+        }
       } else {
         console.warn('⚠️ WebSocket not open, cannot send audio. State:', ws.readyState);
         return null;
@@ -261,15 +317,32 @@ export function useOpenAIRealtime() {
   const triggerResponse = useCallback(() => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      const responseMessage = {
-        type: 'response.create',
-        response: {
-          modalities: ['text', 'audio'],
-        },
-      };
+      // First, commit the audio buffer to indicate we're done sending audio
+      try {
+        ws.send(JSON.stringify({
+          type: 'input_audio_buffer.commit',
+        }));
+        console.log('📤 Committed audio buffer');
+      } catch (error) {
+        console.error('❌ Error committing audio buffer:', error);
+      }
       
-      console.log('📤 Triggering response generation');
-      ws.send(JSON.stringify(responseMessage));
+      // Then create response
+      setTimeout(() => {
+        const responseMessage = {
+          type: 'response.create',
+          response: {
+            modalities: ['text', 'audio'],
+          },
+        };
+        
+        console.log('📤 Triggering response generation');
+        try {
+          ws.send(JSON.stringify(responseMessage));
+        } catch (error) {
+          console.error('❌ Error creating response:', error);
+        }
+      }, 100); // Small delay after commit
     } else {
       console.warn('⚠️ Cannot trigger response: WebSocket not ready. State:', ws?.readyState);
     }

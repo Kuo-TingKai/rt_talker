@@ -149,16 +149,23 @@ export function VoiceConversation() {
 
   const processAudioStream = async (stream: MediaStream) => {
     try {
+      // OpenAI Realtime API expects 24kHz sample rate
       const audioContext = new AudioContext({ sampleRate: 24000 });
       const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      
+      // Use smaller buffer size to reduce latency and avoid large chunks
+      // 4096 samples at 24kHz = ~170ms of audio
+      const processor = audioContext.createScriptProcessor(2048, 1, 1);
 
       // Accumulate audio data and process in batches
       let audioBuffer: Int16Array[] = [];
       let lastProcessTime = Date.now();
       let lastResponseTime = Date.now();
-      const PROCESS_INTERVAL = 1000; // Send audio every 1 second
-      const RESPONSE_INTERVAL = 2000; // Trigger response every 2 seconds
+      let hasStartedSpeaking = false;
+      let totalAudioSent = 0;
+      const PROCESS_INTERVAL = 500; // Send audio every 500ms (more frequent, smaller chunks)
+      const RESPONSE_INTERVAL = 3000; // Trigger response every 3 seconds
+      const MIN_AUDIO_BEFORE_RESPONSE = 2000; // Send at least 2 seconds of audio before responding
 
       processor.onaudioprocess = async (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
@@ -180,19 +187,28 @@ export function VoiceConversation() {
             offset += chunk.length;
           }
           audioBuffer = [];
+          
+          // Track total audio sent (in milliseconds, assuming 24kHz)
+          const audioDurationMs = (combined.length / 24000) * 1000;
+          totalAudioSent += audioDurationMs;
 
           // Process with OpenAI Realtime API
           try {
+            console.log(`📤 Sending audio batch: ${combined.length} samples (~${audioDurationMs.toFixed(0)}ms)`);
             await processAudioWithAI(combined);
           } catch (error) {
-            console.error('Audio processing error:', error);
+            console.error('❌ Audio processing error:', error);
+            // Don't stop, continue processing
           }
         }
 
-        // Trigger response generation periodically (after accumulating some audio)
-        if (now - lastResponseTime >= RESPONSE_INTERVAL) {
+        // Trigger response generation periodically (after accumulating enough audio)
+        if (now - lastResponseTime >= RESPONSE_INTERVAL && totalAudioSent >= MIN_AUDIO_BEFORE_RESPONSE) {
           lastResponseTime = now;
+          hasStartedSpeaking = true;
+          console.log(`🎙️ Triggering response after ${totalAudioSent.toFixed(0)}ms of audio`);
           triggerResponse();
+          totalAudioSent = 0; // Reset counter
         }
 
         // Check for updates periodically
@@ -216,8 +232,12 @@ export function VoiceConversation() {
   const convertFloat32ToPCM16 = (float32Array: Float32Array): Int16Array => {
     const pcm16 = new Int16Array(float32Array.length);
     for (let i = 0; i < float32Array.length; i++) {
+      // Clamp to [-1, 1] range
       const s = Math.max(-1, Math.min(1, float32Array[i]));
-      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      // Convert to 16-bit signed integer
+      // For negative values: multiply by 0x8000 (32768)
+      // For positive values: multiply by 0x7FFF (32767)
+      pcm16[i] = s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7FFF);
     }
     return pcm16;
   };
