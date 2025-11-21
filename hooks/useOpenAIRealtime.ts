@@ -65,19 +65,29 @@ export function useOpenAIRealtime() {
       setIsProcessing(true);
     } else if (message.type === 'response.audio.done') {
       setIsProcessing(false);
-    } else if (message.type === 'session.created' || message.type === 'session.updated') {
-      console.log('Session event:', message.type);
+    } else if (message.type === 'session.created') {
+      console.log('✅ Session created successfully');
+    } else if (message.type === 'session.updated') {
+      console.log('✅ Session updated successfully');
     } else if (message.type === 'error') {
       const errorDetails = (message as any).error;
-      console.error('OpenAI Realtime API error:', {
+      console.error('❌ OpenAI Realtime API error:', {
         type: errorDetails?.type,
         message: errorDetails?.message,
         code: errorDetails?.code,
         param: errorDetails?.param,
+        fullError: errorDetails,
       });
+      
+      // Log the full message for debugging
+      console.error('Full error message:', JSON.stringify(message, null, 2));
+    } else if (message.type === 'input_audio_buffer.speech_started') {
+      console.log('🎤 Speech detected');
+    } else if (message.type === 'input_audio_buffer.speech_stopped') {
+      console.log('🔇 Speech stopped');
     } else {
       // Log other message types for debugging
-      console.log('OpenAI message type:', message.type);
+      console.log('📨 OpenAI message type:', message.type);
     }
 
     // Notify UI of updates
@@ -115,28 +125,30 @@ export function useOpenAIRealtime() {
 
       ws.onopen = () => {
         clearTimeout(connectionTimeout);
-        console.log('OpenAI Realtime API connected');
+        console.log('✅ OpenAI Realtime API WebSocket connected');
         
-        // First, authenticate with the API key
-        ws.send(JSON.stringify({
-          type: 'session.update',
-          session: {
-            modalities: ['text', 'audio'],
-            instructions: 'You are a helpful AI assistant. Respond naturally in conversation.',
-            voice: 'alloy',
-            input_audio_format: 'pcm16',
-            output_audio_format: 'pcm16',
-            input_audio_transcription: {
-              model: 'whisper-1',
+        // Wait a moment before sending session.update
+        // Some WebSocket implementations need a brief delay
+        setTimeout(() => {
+          const sessionConfig = {
+            type: 'session.update',
+            session: {
+              modalities: ['text', 'audio'],
+              instructions: 'You are a helpful AI assistant. Respond naturally in conversation.',
+              voice: 'alloy',
+              input_audio_format: 'pcm16',
+              output_audio_format: 'pcm16',
+              input_audio_transcription: {
+                model: 'whisper-1',
+              },
+              temperature: 0.8,
+              max_response_output_tokens: 4096,
             },
-            temperature: 0.8,
-            max_response_output_tokens: 4096,
-          },
-        }));
-
-        // Note: OpenAI Realtime API requires authentication via header, not query param
-        // This approach may not work. We need a backend proxy.
-        // For now, we'll proceed and see if it works
+          };
+          
+          console.log('📤 Sending session.update:', JSON.stringify(sessionConfig, null, 2));
+          ws.send(JSON.stringify(sessionConfig));
+        }, 100);
 
         wsRef.current = ws;
         resolve(ws);
@@ -163,12 +175,26 @@ export function useOpenAIRealtime() {
           
           // Parse JSON message
           const message: RealtimeMessage = JSON.parse(data);
-          console.log('OpenAI message:', message.type);
+          
+          // Log message type for debugging
+          if (message.type === 'error') {
+            console.error('❌ OpenAI error message received');
+          } else if (message.type.startsWith('response.')) {
+            console.log('📥 OpenAI response:', message.type);
+          } else {
+            console.log('📨 OpenAI message:', message.type);
+          }
+          
           handleRealtimeMessage(message);
         } catch (error) {
-          console.error('Error parsing message:', error);
+          console.error('❌ Error parsing message:', error);
+          if (error instanceof Error) {
+            console.error('Error message:', error.message);
+          }
           console.error('Received data type:', typeof event.data);
-          console.error('Received data:', event.data);
+          if (typeof event.data === 'string') {
+            console.error('Received data (first 200 chars):', event.data.substring(0, 200));
+          }
         }
       };
 
@@ -204,16 +230,18 @@ export function useOpenAIRealtime() {
 
       // Send audio data to OpenAI Realtime API
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
+        const audioMessage = {
           type: 'input_audio_buffer.append',
           audio: base64Audio,
-        }));
-
-        // Trigger response generation (only once per batch, not every time)
-        // We'll use a flag to track if we've already requested a response
+        };
+        
+        // Log audio data size for debugging
+        console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars`);
+        
+        ws.send(JSON.stringify(audioMessage));
         setIsProcessing(true);
       } else {
-        console.warn('WebSocket not open, cannot send audio');
+        console.warn('⚠️ WebSocket not open, cannot send audio. State:', ws.readyState);
         return null;
       }
 
@@ -233,12 +261,17 @@ export function useOpenAIRealtime() {
   const triggerResponse = useCallback(() => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
+      const responseMessage = {
         type: 'response.create',
         response: {
           modalities: ['text', 'audio'],
         },
-      }));
+      };
+      
+      console.log('📤 Triggering response generation');
+      ws.send(JSON.stringify(responseMessage));
+    } else {
+      console.warn('⚠️ Cannot trigger response: WebSocket not ready. State:', ws?.readyState);
     }
   }, []);
 

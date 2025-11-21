@@ -108,9 +108,14 @@ wss.on('connection', (clientWs, req) => {
 
   // Connect to OpenAI Realtime API
   const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+  console.log('🔗 Backend: Connecting to OpenAI Realtime API...');
+  console.log('🔗 Backend: URL:', openaiWsUrl);
+  console.log('🔗 Backend: API Key:', apiKey ? `${apiKey.substring(0, 7)}...${apiKey.substring(apiKey.length - 4)}` : 'NOT SET');
+  
   const openaiWs = new (require('ws'))(openaiWsUrl, {
     headers: {
       'Authorization': `Bearer ${apiKey}`,
+      'OpenAI-Beta': 'realtime=v1',
     },
   });
 
@@ -137,20 +142,39 @@ wss.on('connection', (clientWs, req) => {
 
   // Handle OpenAI connection events
   openaiWs.on('open', () => {
-    console.log('Connected to OpenAI Realtime API');
+    console.log('✅ Backend: Connected to OpenAI Realtime API');
   });
 
   openaiWs.on('error', (error) => {
-    console.error('OpenAI WebSocket error:', error);
+    console.error('❌ Backend: OpenAI WebSocket error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
+    });
     if (clientWs.readyState === clientWs.OPEN) {
       clientWs.close(1011, 'OpenAI connection error');
     }
   });
 
   openaiWs.on('close', (code, reason) => {
-    console.log('OpenAI WebSocket closed:', code, reason.toString());
+    console.log(`⚠️ Backend: OpenAI WebSocket closed: ${code} - ${reason.toString()}`);
     if (clientWs.readyState === clientWs.OPEN) {
       clientWs.close(code, reason);
+    }
+  });
+
+  // Log messages from OpenAI for debugging
+  openaiWs.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      if (message.type === 'error') {
+        console.error('❌ Backend: OpenAI error:', JSON.stringify(message, null, 2));
+      } else if (message.type === 'session.created' || message.type === 'session.updated') {
+        console.log(`✅ Backend: ${message.type}`);
+      }
+    } catch (e) {
+      // Not JSON, ignore
     }
   });
 
