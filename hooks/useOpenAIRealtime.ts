@@ -17,6 +17,7 @@ interface RealtimeMessage {
   };
   delta?: {
     transcript?: string;
+    content?: string;
   };
 }
 
@@ -311,32 +312,6 @@ export function useOpenAIRealtime() {
       }
     }
   }, [sendAudioData]);
-
-  // Send audio data to WebSocket
-  const sendAudioData = useCallback(async (ws: WebSocket, audioData: Int16Array) => {
-    // Convert Int16Array to base64
-    const buffer = new Uint8Array(audioData.buffer);
-    let binaryString = '';
-    for (let i = 0; i < buffer.length; i++) {
-      binaryString += String.fromCharCode(buffer[i]);
-    }
-    const base64Audio = btoa(binaryString);
-
-    const audioMessage = {
-      type: 'input_audio_buffer.append',
-      audio: base64Audio,
-    };
-    
-    const audioSizeKB = (base64Audio.length * 3 / 4) / 1024;
-    console.log(`🎤 Sending audio chunk: ${audioData.length} samples, ${base64Audio.length} base64 chars (~${audioSizeKB.toFixed(2)} KB)`);
-    
-    if (base64Audio.length > 100000) {
-      console.warn('⚠️ Audio chunk is large, splitting might be needed');
-    }
-    
-    ws.send(JSON.stringify(audioMessage));
-    setIsProcessing(true);
-  }, []);
 
   // Process audio with OpenAI Realtime API
   const processAudioWithAI = useCallback(async (audioData: Int16Array): Promise<AIResult | null> => {

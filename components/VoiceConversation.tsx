@@ -112,7 +112,8 @@ export function VoiceConversation() {
   const enableMicrophone = async (room: Room) => {
     try {
       // Request microphone permission and create audio track
-      await room.localParticipant.enableCameraAndMicrophone(false, true);
+      // LiveKit API: enableCameraAndMicrophone(enableVideo, enableAudio)
+      await room.localParticipant.setMicrophoneEnabled(true);
       
       // Wait a bit for the track to be created
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -195,7 +196,8 @@ export function VoiceConversation() {
           // Process with OpenAI Realtime API
           try {
             console.log(`📤 Sending audio batch: ${combined.length} samples (~${audioDurationMs.toFixed(0)}ms)`);
-            await processAudioWithAI(combined);
+            const result = await processAudioWithAI(combined);
+            // Result is used for UI updates, but we also check periodically
           } catch (error) {
             console.error('❌ Audio processing error:', error);
             // Don't stop, continue processing
