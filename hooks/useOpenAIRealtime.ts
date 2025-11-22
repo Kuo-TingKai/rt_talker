@@ -29,6 +29,7 @@ export function useOpenAIRealtime() {
   const updateCallbackRef = useRef<((transcription: string, response: string) => void) | null>(null);
   const sessionReadyRef = useRef<boolean>(false);
   const pendingAudioRef = useRef<Int16Array[]>([]);
+  const processPendingAudioRef = useRef<(() => Promise<void>) | null>(null);
 
   // Set callback to update UI
   const setUpdateCallback = useCallback((callback: (transcription: string, response: string) => void) => {
@@ -71,8 +72,39 @@ export function useOpenAIRealtime() {
     } else if (message.type === 'session.created') {
       console.log('✅ Session created successfully');
       console.log('Session details:', JSON.stringify(message, null, 2));
-      // Don't mark as ready yet - wait for Step 2 (audio modality) to complete
-      // The session will be marked ready after session.updated from Step 2
+      
+      // Check if audio modality is already included in session.created
+      const session = (message as any).session;
+      const modalities = session?.modalities || [];
+      console.log('Session modalities from session.created:', modalities);
+      
+      // If audio is already included, wait a bit before marking as ready
+      // OpenAI needs time to fully initialize the audio processing pipeline
+      if (modalities.includes('audio')) {
+        console.log('✅ Audio modality already included in session.created');
+        // Cancel Step 2 if it's scheduled
+        if (wsRef.current && (wsRef.current as any)._addAudioTimeout) {
+          clearTimeout((wsRef.current as any)._addAudioTimeout);
+          (wsRef.current as any)._addAudioTimeout = null;
+          console.log('⏭️ Skipping Step 2 (audio already included)');
+        }
+        // Wait longer before marking as ready and sending audio
+        // OpenAI needs time to fully initialize audio processing
+        setTimeout(() => {
+          sessionReadyRef.current = true;
+          console.log('✅ Session is now ready for audio (after initialization delay)');
+          // Process any pending audio after session is confirmed ready
+          // Add additional delay before processing to ensure everything is ready
+          setTimeout(() => {
+            if (pendingAudioRef.current.length > 0 && processPendingAudioRef.current) {
+              console.log('📤 Processing pending audio chunks from session.created');
+              processPendingAudioRef.current();
+            }
+          }, 500); // Additional 500ms delay before processing pending audio
+        }, 2000); // Increased delay to 2 seconds for full initialization
+      } else {
+        console.log('⏳ Audio modality not in session.created, waiting for Step 2...');
+      }
     } else if (message.type === 'session.updated') {
       console.log('✅ Session updated successfully');
       const session = (message as any).session;
@@ -82,9 +114,14 @@ export function useOpenAIRealtime() {
       // Only mark as ready if audio modality is present
       if (modalities.includes('audio')) {
         sessionReadyRef.current = true;
-        console.log('✅ Session is now ready for audio (audio modality confirmed)');
+        console.log('✅ Session is now ready for audio (audio modality confirmed via session.updated)');
         // Process any pending audio
-        processPendingAudio();
+        setTimeout(() => {
+          if (sessionReadyRef.current && pendingAudioRef.current.length > 0 && processPendingAudioRef.current) {
+            console.log('📤 Processing pending audio chunks from session.updated');
+            processPendingAudioRef.current();
+          }
+        }, 100);
       } else {
         console.log('⏳ Session updated but audio modality not yet added');
       }
@@ -171,9 +208,16 @@ export function useOpenAIRealtime() {
           }
           
           // Wait for session.created confirmation before adding audio
-          // We'll add audio in a separate step after confirming text works
+          // Only add audio if it's not already included in session.created
+          // OpenAI sometimes includes audio modality by default
           const addAudioTimeout = setTimeout(() => {
             if (ws.readyState === WebSocket.OPEN && wsRef.current === ws) {
+              // Check if session is already ready (audio was included in session.created)
+              if (sessionReadyRef.current) {
+                console.log('⏭️ Skipping Step 2 - audio already included in session.created');
+                return;
+              }
+              
               console.log('📤 Step 2: Adding audio modality...');
               const audioConfig = {
                 type: 'session.update',
@@ -193,7 +237,7 @@ export function useOpenAIRealtime() {
                 console.error('❌ Error adding audio config:', error);
               }
             }
-          }, 800); // Wait 800ms for session.created to be processed
+          }, 1000); // Wait 1 second for session.created to be processed
           
           // Store timeout to clear if connection closes
           (ws as any)._addAudioTimeout = addAudioTimeout;
@@ -263,7 +307,7 @@ export function useOpenAIRealtime() {
     });
   }, [handleRealtimeMessage]);
 
-  // Send audio data to WebSocket
+  // Send audio data to WebSocket (defined first to avoid dependency issues)
   const sendAudioData = useCallback(async (ws: WebSocket, audioData: Int16Array) => {
     // Convert Int16Array to base64
     const buffer = new Uint8Array(audioData.buffer);
@@ -285,8 +329,13 @@ export function useOpenAIRealtime() {
       console.warn('⚠️ Audio chunk is large, splitting might be needed');
     }
     
-    ws.send(JSON.stringify(audioMessage));
-    setIsProcessing(true);
+    try {
+      ws.send(JSON.stringify(audioMessage));
+      setIsProcessing(true);
+    } catch (error) {
+      console.error('❌ Error sending audio message:', error);
+      throw error;
+    }
   }, []);
 
   // Process pending audio once session is ready
@@ -302,20 +351,32 @@ export function useOpenAIRealtime() {
     
     console.log(`📤 Processing ${pendingAudioRef.current.length} pending audio chunks`);
     
-    // Process all pending audio chunks
-    const chunksToProcess = [...pendingAudioRef.current];
+    // Don't send all pending chunks at once - this might overwhelm the server
+    // Instead, only send the most recent chunks and discard older ones
+    // This prevents sending stale audio data
+    const chunksToProcess = pendingAudioRef.current.slice(-2); // Only keep last 2 chunks
     pendingAudioRef.current = [];
+    
+    console.log(`📤 Sending only ${chunksToProcess.length} most recent chunks (discarding older ones)`);
+    
+    // Add a delay before sending first chunk to ensure session is fully ready
+    await new Promise(resolve => setTimeout(resolve, 200));
     
     for (const audioData of chunksToProcess) {
       try {
         await sendAudioData(ws, audioData);
-        // Small delay between chunks to avoid overwhelming the server
-        await new Promise(resolve => setTimeout(resolve, 50));
+        // Increased delay between chunks to avoid overwhelming the server
+        await new Promise(resolve => setTimeout(resolve, 200)); // Increased from 50ms to 200ms
       } catch (error) {
         console.error('❌ Error processing pending audio:', error);
+        // Stop processing if we get an error
+        break;
       }
     }
   }, [sendAudioData]);
+  
+  // Update ref when function is defined
+  processPendingAudioRef.current = processPendingAudio;
 
   // Process audio with OpenAI Realtime API
   const processAudioWithAI = useCallback(async (audioData: Int16Array): Promise<AIResult | null> => {
@@ -358,7 +419,7 @@ export function useOpenAIRealtime() {
       setIsProcessing(false);
       return null;
     }
-  }, [initWebSocket, handleRealtimeMessage]);
+  }, [initWebSocket, sendAudioData]);
 
   // Trigger response generation (call this after sending audio)
   const triggerResponse = useCallback(() => {

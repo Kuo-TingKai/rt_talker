@@ -264,32 +264,128 @@ GUI顯示disconnected 後端可能需要livekit憑證 請告訴我怎麼取得li
 
 ---
 
+### 12. Session Ready 判斷邏輯改進
+
+**Prompt:**
+```
+按下start conversation之後數秒還是報錯
+[server_error after session.created]
+```
+
+**What it accomplished:**
+- 發現 `session.created` 已包含 `audio` modality（即使只請求 `text`）
+- 實現檢查邏輯：如果 `session.created` 已包含 `audio`，則跳過 Step 2
+- 改進 session ready 標記時機：等待 2 秒後再標記為 ready
+- 添加額外延遲：在處理 pending audio 前再等待 500ms
+- 限制 pending audio chunks：只發送最後 2 個，丟棄舊的
+- 增加 chunks 之間的延遲：從 50ms 增加到 200ms
+
+**Why it worked well:**
+- 通過日誌分析發現了關鍵問題（session.created 已包含 audio）
+- 系統性地改進了時序和發送策略
+
+**Challenges:**
+- 即使改進了時序，發送音訊時仍會收到 `server_error`
+- 需要進一步調查音訊格式或 API 使用方式
+
+---
+
+### 13. 音訊發送策略優化
+
+**Prompt:**
+```
+after pressing start conversation
+[server_error when sending audio chunks]
+```
+
+**What it accomplished:**
+- 限制一次發送的 pending audio chunks 數量（只保留最後 2 個）
+- 增加音訊 chunks 之間的延遲（從 50ms 到 200ms）
+- 添加發送前的額外延遲（200ms）
+- 改進錯誤處理：如果發送失敗則停止處理
+
+**Why it worked well:**
+- 識別出發送過快可能是問題原因
+- 系統性地減緩發送速度
+
+**Current Status:**
+- 問題仍然存在，需要進一步調查
+
+---
+
 ## 當前狀態和待解決問題
 
 ### 主要問題：OpenAI Realtime API server_error
 
 **問題描述：**
-- 連接 OpenAI Realtime API 後立即收到 `server_error`
+- 連接 OpenAI Realtime API 後，在發送音訊數據時收到 `server_error`
 - 錯誤訊息：`The server had an error while processing your request`
 - WebSocket 連接立即關閉（code 1000）
+- 錯誤發生時機：在 `session.created` 後，發送音訊數據時立即觸發
 
 **已嘗試的解決方案：**
-1. ✅ 建立後端 WebSocket 代理（解決認證問題）
-2. ✅ 修正 Blob 處理問題
-3. ✅ 改進音訊格式轉換
-4. ✅ 優化訊息處理邏輯
+
+#### 1. 後端 WebSocket 代理
+- ✅ 建立後端 WebSocket 代理（解決瀏覽器無法設置 Authorization header 的問題）
+- ✅ 添加 `OpenAI-Beta: realtime=v1` header
+
+#### 2. 訊息處理改進
+- ✅ 修正 Blob/ArrayBuffer 到字串的轉換問題
+- ✅ 改進訊息解析邏輯
+- ✅ 添加詳細的錯誤日誌
+
+#### 3. Session 初始化策略
+- ✅ 實現兩步初始化：先發送 `text` modality，再添加 `audio` modality
+- ✅ 發現 OpenAI 在 `session.created` 時已自動包含 `audio` modality
+- ✅ 改進邏輯：檢查 `session.created` 是否已包含 `audio`，如果包含則跳過 Step 2
+
+#### 4. 時序優化
+- ✅ 增加初始化等待時間：從 1.5 秒增加到 2 秒
+- ✅ 添加額外延遲：在處理 pending audio 前再等待 500ms
+- ✅ 限制 pending audio chunks 數量：只發送最後 2 個 chunks，丟棄舊的
+- ✅ 增加 chunks 之間的延遲：從 50ms 增加到 200ms
+
+#### 5. 音訊發送策略
+- ✅ 實現音訊隊列機制：在 session 未準備好時將音訊加入隊列
+- ✅ 改進音訊發送頻率控制
+- ✅ 添加音訊大小檢查和警告
+
+**當前觀察：**
+- `session.created` 成功，包含 `audio` 和 `text` modalities
+- 等待 2 秒後標記 session 為 ready
+- 發送音訊數據後立即收到 `server_error`
+- 錯誤發生在發送第一個或第二個音訊 chunk 時
 
 **可能的原因：**
-- OpenAI Realtime API 的使用方式不正確
-- 音訊格式或參數設定有誤
-- API 版本或模型名稱不正確
-- 需要特定的初始化流程
+1. **音訊格式問題**：PCM16 格式可能不正確，或音訊數據本身有問題
+2. **API 限制**：可能對音訊發送頻率或大小有限制
+3. **Session 狀態**：雖然等待了 2 秒，但 OpenAI 可能還需要更多時間來完全初始化音訊處理管道
+4. **音訊數據問題**：可能音訊數據在轉換過程中損壞
+5. **API Bug**：可能是 OpenAI Realtime API 的已知問題（Beta 階段）
 
-**下一步：**
-- 查閱 OpenAI Realtime API 官方文件
-- 檢查 API 使用範例
-- 驗證音訊格式和參數
-- 可能需要聯繫 OpenAI 支援
+**下一步計劃：**
+1. **檢查音訊格式**：
+   - 驗證 PCM16 轉換是否正確
+   - 檢查音訊採樣率和格式是否符合要求
+   - 嘗試發送空的音訊數據測試
+
+2. **簡化測試**：
+   - 嘗試只發送一個非常小的音訊 chunk
+   - 增加發送前的等待時間（3-5 秒）
+   - 檢查是否需要先發送 `input_audio_buffer.commit` 或其他初始化訊息
+
+3. **查閱官方文件**：
+   - 重新檢查 OpenAI Realtime API 官方文件
+   - 查看是否有遺漏的初始化步驟
+   - 檢查音訊發送的正確格式和時機
+
+4. **聯繫支援**：
+   - 如果問題持續，使用 session ID 聯繫 OpenAI 支援
+   - 提供完整的錯誤日誌和 session ID
+
+5. **替代方案**：
+   - 考慮使用組合 API（Whisper + Chat Completions + TTS）
+   - 評估其他語音 API 服務
 
 ---
 
@@ -331,11 +427,20 @@ However, manual refinement was necessary for:
 
 The combination of AI assistance and manual refinement resulted in a mostly functional application. The core infrastructure is complete, but there's an ongoing issue with OpenAI Realtime API connection that requires further investigation.
 
-**Current Completion Status**: ~70%
+**Current Completion Status**: ~75%
 - ✅ Core infrastructure: 100%
 - ✅ LiveKit integration: 100%
 - ✅ UI components: 100%
-- ✅ OpenAI integration: 60% (connection works but has server_error)
-- ✅ Audio processing: 80% (works but results not displaying)
+- ✅ OpenAI integration: 70% (connection works, session created successfully, but server_error when sending audio)
+- ✅ Audio processing: 85% (capture and format conversion works, but sending to OpenAI causes errors)
 - ✅ Documentation: 100%
+- ✅ Backend WebSocket proxy: 100%
+- ✅ Error handling and logging: 100%
+
+**Recent Improvements:**
+- ✅ Fixed session initialization logic (checking for audio modality in session.created)
+- ✅ Improved timing and delays for session readiness
+- ✅ Implemented audio queueing mechanism
+- ✅ Optimized audio chunk sending strategy
+- ✅ Enhanced error logging and debugging
 
