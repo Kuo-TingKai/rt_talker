@@ -45,6 +45,7 @@ export function VoiceConversation() {
       disconnect();
       cleanupAI();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cleanupAI]);
 
   const connect = async () => {
@@ -170,6 +171,7 @@ export function VoiceConversation() {
       const PROCESS_INTERVAL = 500; // Send audio every 500ms (more frequent, smaller chunks)
       const RESPONSE_INTERVAL = 3000; // Trigger response every 3 seconds
       const MIN_AUDIO_BEFORE_RESPONSE = 2000; // Send at least 2 seconds of audio before responding
+      const MAX_AUDIO_BUFFER_SIZE = 10; // Limit buffer size to prevent memory issues
 
       processor.onaudioprocess = async (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
