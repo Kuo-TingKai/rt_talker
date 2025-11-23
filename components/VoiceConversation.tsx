@@ -5,7 +5,7 @@ import { Room, RoomEvent, RemoteParticipant, LocalAudioTrack } from 'livekit-cli
 import { ConnectionStatus } from './ConnectionStatus';
 import { ConversationControls } from './ConversationControls';
 import { MicrophoneStatus } from './MicrophoneStatus';
-import { useOpenAIRealtime } from '@/hooks/useOpenAIRealtime';
+import { useOpenAIWhisperChat } from '@/hooks/useOpenAIWhisperChat';
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
@@ -23,37 +23,29 @@ export function VoiceConversation() {
   const isProcessingRef = useRef<boolean>(false);
   const isConnectedRef = useRef<boolean>(false);
   const { 
-    processAudioWithAI, 
-    triggerResponse,
+    processAudio,
     isProcessing,
     error: aiError,
     connectionStatus: aiConnectionStatus,
-    retry: retryAI,
-    cleanup: cleanupAI,
-    setUpdateCallback,
-    getCurrentTranscription,
-    getCurrentResponse,
-  } = useOpenAIRealtime();
+    resetConversation,
+  } = useOpenAIWhisperChat();
 
-  // Set up callback to update UI when transcription/response changes
-  useEffect(() => {
-    setUpdateCallback((transcription, response) => {
-      if (transcription) setTranscription(transcription);
-      if (response) setAiResponse(response);
-    });
-  }, [setUpdateCallback]);
+  // MediaRecorder for audio recording
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cleanup on unmount only
   useEffect(() => {
     return () => {
       // Only disconnect if actually connected (check refs, not state)
-      if (roomRef.current || audioContextRef.current || isProcessingRef.current) {
+      if (roomRef.current || mediaRecorderRef.current || isProcessingRef.current) {
         disconnect();
       }
-      cleanupAI();
+      resetConversation();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanupAI]); // Only depend on cleanupAI, not connectionState
+  }, [resetConversation]); // Only depend on resetConversation
 
   const connect = async () => {
     try {
@@ -163,155 +155,94 @@ export function VoiceConversation() {
 
   const processAudioStream = async (stream: MediaStream) => {
     try {
-      // Stop any existing audio processing
-      if (audioProcessorRef.current) {
-        audioProcessorRef.current.disconnect();
-        audioProcessorRef.current = null;
+      // Stop any existing recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
       }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        await audioContextRef.current.close();
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+      audioChunksRef.current = [];
+
+      // Create MediaRecorder to record audio as Blob
+      // Try to use WAV format first (more compatible with Whisper API)
+      // Fallback to webm if WAV is not supported
+      let mimeType = 'audio/webm;codecs=opus';
+      if (MediaRecorder.isTypeSupported('audio/wav')) {
+        mimeType = 'audio/wav';
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm';
       }
       
-      // OpenAI Realtime API expects 24kHz sample rate
-      const audioContext = new AudioContext({ sampleRate: 24000 });
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-      
-      // Use smaller buffer size to reduce latency and avoid large chunks
-      // 4096 samples at 24kHz = ~170ms of audio
-      const processor = audioContext.createScriptProcessor(2048, 1, 1);
-      audioProcessorRef.current = processor;
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: mimeType,
+      });
+      console.log('🎙️ Using audio format:', mimeType);
+      mediaRecorderRef.current = mediaRecorder;
       isProcessingRef.current = true;
 
-      // Accumulate audio data and process in batches
-      let audioBuffer: Int16Array[] = [];
-      let lastProcessTime = Date.now();
-      let lastResponseTime = Date.now();
-      let hasStartedSpeaking = false;
-      let totalAudioSent = 0;
-      const PROCESS_INTERVAL = 500; // Send audio every 500ms (more frequent, smaller chunks)
-      const RESPONSE_INTERVAL = 3000; // Trigger response every 3 seconds
-      const MIN_AUDIO_BEFORE_RESPONSE = 2000; // Send at least 2 seconds of audio before responding
-      const MAX_AUDIO_BUFFER_SIZE = 10; // Limit buffer size to prevent memory issues
-
-      processor.onaudioprocess = async (e) => {
-        // Check if we should continue processing (use refs for immediate checks)
-        if (!isProcessingRef.current || !isConnectedRef.current || !roomRef.current) {
-          // Only log once per condition to avoid spam
-          if (!isProcessingRef.current && Math.random() < 0.01) {
-            console.log('⚠️ Audio processing stopped: isProcessingRef is false');
-          }
-          if (!isConnectedRef.current && Math.random() < 0.01) {
-            console.log('⚠️ Audio processing stopped: isConnectedRef is false');
-          }
-          if (!roomRef.current && Math.random() < 0.01) {
-            console.log('⚠️ Audio processing stopped: roomRef is null');
-          }
-          return;
-        }
-        
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcm16 = convertFloat32ToPCM16(inputData);
-        audioBuffer.push(pcm16);
-
-        const now = Date.now();
-        
-        // Send audio data periodically
-        if (now - lastProcessTime >= PROCESS_INTERVAL && audioBuffer.length > 0) {
-          lastProcessTime = now;
-          
-          // Limit buffer size to prevent memory issues
-          if (audioBuffer.length > MAX_AUDIO_BUFFER_SIZE) {
-            console.warn(`⚠️ Audio buffer too large (${audioBuffer.length}), keeping only last ${MAX_AUDIO_BUFFER_SIZE} chunks`);
-            audioBuffer = audioBuffer.slice(-MAX_AUDIO_BUFFER_SIZE);
-          }
-          
-          // Combine audio chunks
-          const totalLength = audioBuffer.reduce((sum, arr) => sum + arr.length, 0);
-          const combined = new Int16Array(totalLength);
-          let offset = 0;
-          for (const chunk of audioBuffer) {
-            combined.set(chunk, offset);
-            offset += chunk.length;
-          }
-          audioBuffer = []; // Clear buffer after processing
-          
-          // Track total audio sent (in milliseconds, assuming 24kHz)
-          const audioDurationMs = (combined.length / 24000) * 1000;
-          totalAudioSent += audioDurationMs;
-
-          // Process with OpenAI Realtime API
-          try {
-            console.log(`📤 Sending audio batch: ${combined.length} samples (~${audioDurationMs.toFixed(0)}ms), total sent: ${totalAudioSent.toFixed(0)}ms`);
-            const result = await processAudioWithAI(combined);
-            if (result) {
-              console.log('✅ Audio processed, transcription:', result.transcription?.substring(0, 50) || 'none', 'response:', result.response?.substring(0, 50) || 'none');
-            } else {
-              console.log('⚠️ Audio processing returned null (may be queued)');
-            }
-          } catch (error) {
-            console.error('❌ Audio processing error:', error);
-            // Don't stop, continue processing
-          }
-        }
-
-        // Trigger response generation periodically (after accumulating enough audio)
-        if (now - lastResponseTime >= RESPONSE_INTERVAL && totalAudioSent >= MIN_AUDIO_BEFORE_RESPONSE) {
-          lastResponseTime = now;
-          hasStartedSpeaking = true;
-          console.log(`🎙️ Triggering response after ${totalAudioSent.toFixed(0)}ms of audio`);
-          triggerResponse();
-          totalAudioSent = 0; // Reset counter
-        }
-
-        // Check for updates periodically (more frequent updates)
-        const currentTranscription = getCurrentTranscription();
-        const currentResponse = getCurrentResponse();
-        if (currentTranscription && currentTranscription !== transcription) {
-          setTranscription(currentTranscription);
-          console.log('📝 Updated transcription:', currentTranscription);
-        }
-        if (currentResponse && currentResponse !== aiResponse) {
-          setAiResponse(currentResponse);
-          console.log('🤖 Updated AI response:', currentResponse);
+      // Collect audio chunks
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
       };
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
+      // Process audio periodically (every 3 seconds)
+      const PROCESS_INTERVAL = 3000; // 3 seconds
+      recordingIntervalRef.current = setInterval(async () => {
+        if (!isProcessingRef.current || !isConnectedRef.current) {
+          return;
+        }
+
+        // Stop current recording and process
+        if (mediaRecorder.state === 'recording') {
+          mediaRecorder.stop();
+        }
+
+        // Wait a bit for data to be available
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Process accumulated audio chunks
+        if (audioChunksRef.current.length > 0) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          audioChunksRef.current = []; // Clear chunks after processing
+
+          console.log(`📤 Processing audio blob: ${audioBlob.size} bytes`);
+
+          try {
+            const result = await processAudio(audioBlob);
+            if (result) {
+              if (result.transcription) {
+                setTranscription(prev => prev + (prev ? ' ' : '') + result.transcription);
+                console.log('✅ Transcription:', result.transcription);
+              }
+              if (result.response) {
+                setAiResponse(prev => prev + (prev ? ' ' : '') + result.response);
+                console.log('✅ AI Response:', result.response);
+              }
+            }
+          } catch (error) {
+            console.error('❌ Audio processing error:', error);
+          }
+        }
+
+        // Start recording again
+        if (isProcessingRef.current && isConnectedRef.current && mediaRecorder.state === 'inactive') {
+          mediaRecorder.start();
+        }
+      }, PROCESS_INTERVAL);
+
+      // Start recording
+      mediaRecorder.start();
+      console.log('🎙️ Started audio recording');
     } catch (err) {
       console.error('Audio processing error:', err);
       isProcessingRef.current = false;
+      setError(err instanceof Error ? err.message : 'Failed to process audio stream');
     }
   };
 
-  const convertFloat32ToPCM16 = (float32Array: Float32Array): Int16Array => {
-    const pcm16 = new Int16Array(float32Array.length);
-    for (let i = 0; i < float32Array.length; i++) {
-      let s = float32Array[i];
-      
-      // Check for invalid values (NaN, Infinity)
-      if (!isFinite(s)) {
-        console.warn(`⚠️ Invalid audio sample at index ${i}: ${s}, replacing with 0`);
-        s = 0;
-      }
-      
-      // Clamp to [-1, 1] range
-      s = Math.max(-1, Math.min(1, s));
-      
-      // Convert to 16-bit signed integer
-      // Standard PCM16 conversion: multiply by 32767 and clamp to [-32768, 32767]
-      const sample = Math.round(s * 32767);
-      pcm16[i] = Math.max(-32768, Math.min(32767, sample));
-      
-      // Final check for NaN (shouldn't happen, but just in case)
-      if (isNaN(pcm16[i])) {
-        console.warn(`⚠️ NaN detected in PCM16 at index ${i}, replacing with 0`);
-        pcm16[i] = 0;
-      }
-    }
-    return pcm16;
-  };
 
   const disconnect = async () => {
     // Skip if already disconnected
@@ -325,46 +256,36 @@ export function VoiceConversation() {
       // Stop audio processing IMMEDIATELY to prevent more audio from being sent
       isProcessingRef.current = false;
       
-      // Get final transcription and response before clearing (non-blocking)
-      const finalTranscription = getCurrentTranscription();
-      const finalResponse = getCurrentResponse();
-      
-      if (finalTranscription) {
-        setTranscription(finalTranscription);
-        console.log('📝 Final transcription:', finalTranscription);
-      }
-      if (finalResponse) {
-        setAiResponse(finalResponse);
-        console.log('🤖 Final AI response:', finalResponse);
-      }
-      
-      // Try to trigger final response (non-blocking, don't wait)
-      try {
-        triggerResponse();
-        console.log('📤 Triggered final response generation');
-      } catch (error) {
-        console.warn('⚠️ Could not trigger final response:', error);
-      }
-      
-      // Wait briefly for any final responses (non-blocking, don't wait too long)
-      // Use a shorter timeout to avoid blocking
-      setTimeout(() => {
-        const currentTranscription = getCurrentTranscription();
-        const currentResponse = getCurrentResponse();
-        
-        if (currentTranscription && currentTranscription !== finalTranscription) {
-          setTranscription(currentTranscription);
+      // Process any remaining audio chunks before disconnecting
+      if (audioChunksRef.current.length > 0 && mediaRecorderRef.current) {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        try {
+          const result = await processAudio(audioBlob);
+          if (result) {
+            if (result.transcription) {
+              setTranscription(prev => prev + (prev ? ' ' : '') + result.transcription);
+            }
+            if (result.response) {
+              setAiResponse(prev => prev + (prev ? ' ' : '') + result.response);
+            }
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not process final audio:', error);
         }
-        if (currentResponse && currentResponse !== finalResponse) {
-          setAiResponse(currentResponse);
-        }
-      }, 500); // Only wait 500ms, don't block
-      
-      if (audioProcessorRef.current) {
-        audioProcessorRef.current.disconnect();
-        audioProcessorRef.current = null;
       }
       
+      // Clean up MediaRecorder
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current = null;
+      }
+      audioChunksRef.current = [];
+      
+      // Clean up audio context (if still using it)
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         await audioContextRef.current.close();
         audioContextRef.current = null;
@@ -402,12 +323,10 @@ export function VoiceConversation() {
         <ConnectionStatus state={connectionState} />
         
         {/* AI Connection Status */}
-        {aiConnectionStatus !== 'disconnected' && (
+        {aiConnectionStatus === 'connected' && (
           <div className="ai-connection-status">
             <div className={`status-indicator ${aiConnectionStatus}`} />
-            <span className="status-text">
-              AI: {aiConnectionStatus === 'connecting' ? 'Connecting...' : aiConnectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
-            </span>
+            <span className="status-text">AI: Connected</span>
           </div>
         )}
         
@@ -415,11 +334,7 @@ export function VoiceConversation() {
         {(error || aiError) && (
           <div className="error-message">
             <p><strong>Error:</strong> {error || aiError}</p>
-            {aiError && (
-              <button onClick={retryAI} className="retry-button">
-                Retry Connection
-              </button>
-            )}
+            <p>Please try again or check your OpenAI API key and network connection.</p>
           </div>
         )}
 
@@ -457,12 +372,10 @@ export function VoiceConversation() {
         </div>
 
         {/* Loading and Processing Indicators */}
-        {(isProcessing || aiConnectionStatus === 'connecting') && (
+        {isProcessing && (
           <div className="processing-indicator">
             <div className="spinner" />
-            <p>
-              {aiConnectionStatus === 'connecting' ? 'Connecting to AI...' : 'AI is processing...'}
-            </p>
+            <p>AI is processing...</p>
           </div>
         )}
       </div>
