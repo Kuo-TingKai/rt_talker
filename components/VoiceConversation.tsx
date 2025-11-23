@@ -42,17 +42,17 @@ export function VoiceConversation() {
     });
   }, [setUpdateCallback]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount only
   useEffect(() => {
     return () => {
-      // Only disconnect if actually connected
-      if (connectionState !== 'disconnected' || roomRef.current) {
+      // Only disconnect if actually connected (check refs, not state)
+      if (roomRef.current || audioContextRef.current || isProcessingRef.current) {
         disconnect();
       }
       cleanupAI();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanupAI, connectionState]);
+  }, [cleanupAI]); // Only depend on cleanupAI, not connectionState
 
   const connect = async () => {
     try {
