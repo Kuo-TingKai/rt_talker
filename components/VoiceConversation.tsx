@@ -21,6 +21,7 @@ export function VoiceConversation() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const isProcessingRef = useRef<boolean>(false);
+  const isConnectedRef = useRef<boolean>(false);
   const { 
     processAudioWithAI, 
     triggerResponse,
@@ -90,11 +91,13 @@ export function VoiceConversation() {
       room.on(RoomEvent.Connected, () => {
         console.log('Connected to room');
         setConnectionState('connected');
+        isConnectedRef.current = true; // Update ref immediately
       });
 
       room.on(RoomEvent.Disconnected, () => {
         console.log('Disconnected from room');
         setConnectionState('disconnected');
+        isConnectedRef.current = false; // Update ref immediately
         setIsMicActive(false);
         localAudioTrackRef.current = null;
       });
@@ -192,8 +195,18 @@ export function VoiceConversation() {
       const MAX_AUDIO_BUFFER_SIZE = 10; // Limit buffer size to prevent memory issues
 
       processor.onaudioprocess = async (e) => {
-        // Check if we should continue processing
-        if (!isProcessingRef.current || connectionState === 'disconnected' || !roomRef.current) {
+        // Check if we should continue processing (use refs for immediate checks)
+        if (!isProcessingRef.current || !isConnectedRef.current || !roomRef.current) {
+          // Only log once per condition to avoid spam
+          if (!isProcessingRef.current && Math.random() < 0.01) {
+            console.log('⚠️ Audio processing stopped: isProcessingRef is false');
+          }
+          if (!isConnectedRef.current && Math.random() < 0.01) {
+            console.log('⚠️ Audio processing stopped: isConnectedRef is false');
+          }
+          if (!roomRef.current && Math.random() < 0.01) {
+            console.log('⚠️ Audio processing stopped: roomRef is null');
+          }
           return;
         }
         
@@ -229,9 +242,13 @@ export function VoiceConversation() {
 
           // Process with OpenAI Realtime API
           try {
-            console.log(`📤 Sending audio batch: ${combined.length} samples (~${audioDurationMs.toFixed(0)}ms)`);
+            console.log(`📤 Sending audio batch: ${combined.length} samples (~${audioDurationMs.toFixed(0)}ms), total sent: ${totalAudioSent.toFixed(0)}ms`);
             const result = await processAudioWithAI(combined);
-            // Result is used for UI updates, but we also check periodically
+            if (result) {
+              console.log('✅ Audio processed, transcription:', result.transcription?.substring(0, 50) || 'none', 'response:', result.response?.substring(0, 50) || 'none');
+            } else {
+              console.log('⚠️ Audio processing returned null (may be queued)');
+            }
           } catch (error) {
             console.error('❌ Audio processing error:', error);
             // Don't stop, continue processing
@@ -247,14 +264,16 @@ export function VoiceConversation() {
           totalAudioSent = 0; // Reset counter
         }
 
-        // Check for updates periodically
+        // Check for updates periodically (more frequent updates)
         const currentTranscription = getCurrentTranscription();
         const currentResponse = getCurrentResponse();
         if (currentTranscription && currentTranscription !== transcription) {
           setTranscription(currentTranscription);
+          console.log('📝 Updated transcription:', currentTranscription);
         }
         if (currentResponse && currentResponse !== aiResponse) {
           setAiResponse(currentResponse);
+          console.log('🤖 Updated AI response:', currentResponse);
         }
       };
 
@@ -269,12 +288,27 @@ export function VoiceConversation() {
   const convertFloat32ToPCM16 = (float32Array: Float32Array): Int16Array => {
     const pcm16 = new Int16Array(float32Array.length);
     for (let i = 0; i < float32Array.length; i++) {
+      let s = float32Array[i];
+      
+      // Check for invalid values (NaN, Infinity)
+      if (!isFinite(s)) {
+        console.warn(`⚠️ Invalid audio sample at index ${i}: ${s}, replacing with 0`);
+        s = 0;
+      }
+      
       // Clamp to [-1, 1] range
-      const s = Math.max(-1, Math.min(1, float32Array[i]));
+      s = Math.max(-1, Math.min(1, s));
+      
       // Convert to 16-bit signed integer
-      // For negative values: multiply by 0x8000 (32768)
-      // For positive values: multiply by 0x7FFF (32767)
-      pcm16[i] = s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7FFF);
+      // Standard PCM16 conversion: multiply by 32767 and clamp to [-32768, 32767]
+      const sample = Math.round(s * 32767);
+      pcm16[i] = Math.max(-32768, Math.min(32767, sample));
+      
+      // Final check for NaN (shouldn't happen, but just in case)
+      if (isNaN(pcm16[i])) {
+        console.warn(`⚠️ NaN detected in PCM16 at index ${i}, replacing with 0`);
+        pcm16[i] = 0;
+      }
     }
     return pcm16;
   };
@@ -286,22 +320,45 @@ export function VoiceConversation() {
     }
     
     try {
-      // Wait a bit to ensure any pending responses are received
-      console.log('Disconnecting... Waiting for final responses...');
+      console.log('Disconnecting...');
       
-      // Get final transcription and response before clearing
+      // Stop audio processing IMMEDIATELY to prevent more audio from being sent
+      isProcessingRef.current = false;
+      
+      // Get final transcription and response before clearing (non-blocking)
       const finalTranscription = getCurrentTranscription();
       const finalResponse = getCurrentResponse();
       
       if (finalTranscription) {
         setTranscription(finalTranscription);
+        console.log('📝 Final transcription:', finalTranscription);
       }
       if (finalResponse) {
         setAiResponse(finalResponse);
+        console.log('🤖 Final AI response:', finalResponse);
       }
-
-      // Stop audio processing first
-      isProcessingRef.current = false;
+      
+      // Try to trigger final response (non-blocking, don't wait)
+      try {
+        triggerResponse();
+        console.log('📤 Triggered final response generation');
+      } catch (error) {
+        console.warn('⚠️ Could not trigger final response:', error);
+      }
+      
+      // Wait briefly for any final responses (non-blocking, don't wait too long)
+      // Use a shorter timeout to avoid blocking
+      setTimeout(() => {
+        const currentTranscription = getCurrentTranscription();
+        const currentResponse = getCurrentResponse();
+        
+        if (currentTranscription && currentTranscription !== finalTranscription) {
+          setTranscription(currentTranscription);
+        }
+        if (currentResponse && currentResponse !== finalResponse) {
+          setAiResponse(currentResponse);
+        }
+      }, 500); // Only wait 500ms, don't block
       
       if (audioProcessorRef.current) {
         audioProcessorRef.current.disconnect();
@@ -328,6 +385,7 @@ export function VoiceConversation() {
 
       setIsMicActive(false);
       setConnectionState('disconnected');
+      isConnectedRef.current = false; // Update ref immediately
       
       // Don't clear transcription and response immediately - keep them visible
       // They will be cleared when starting a new conversation

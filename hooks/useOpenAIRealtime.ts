@@ -99,12 +99,17 @@ export function useOpenAIRealtime() {
           sessionReadyRef.current = true;
           console.log('✅ Session is now ready for audio (after initialization delay)');
           
+          // Don't send empty commit - it might cause server_error
+          // Just mark session as ready and wait for actual audio to arrive
+          
           // Process any pending audio after session is confirmed ready
           // Add additional delay before processing to ensure everything is ready
           setTimeout(() => {
-            if (pendingAudioRef.current.length > 0 && processPendingAudioRef.current) {
-              console.log('📤 Processing pending audio chunks from session.created');
-              processPendingAudioRef.current();
+            // Don't process old pending audio - it might cause server_error
+            // Instead, discard it and wait for new audio to arrive
+            if (pendingAudioRef.current.length > 0) {
+              console.log(`📤 Discarding ${pendingAudioRef.current.length} old pending audio chunks to avoid server_error`);
+              pendingAudioRef.current = [];
             }
             
             // Check if there's a pending response trigger after processing audio
@@ -120,10 +125,10 @@ export function useOpenAIRealtime() {
                 } else {
                   console.warn('⚠️ Session no longer ready, skipping pending response trigger');
                 }
-              }, 1000); // Increased delay to 1 second to ensure audio is fully processed
+              }, 2000); // Increased delay to 2 seconds to ensure audio is fully processed
             }
-          }, 1000); // Increased delay to 1 second before processing pending audio
-        }, 2000); // Increased delay to 2 seconds for full initialization
+          }, 1000); // Wait 1 second before processing pending audio
+        }, 6000); // Increased delay to 6 seconds for full initialization
       } else {
         console.log('⏳ Audio modality not in session.created, waiting for Step 2...');
       }
@@ -188,6 +193,10 @@ export function useOpenAIRealtime() {
       
       setError(userFriendlyMessage);
       setConnectionStatus('disconnected');
+      
+      // Don't automatically reconnect on server_error - it might be a persistent issue
+      // Let the user manually retry or wait for the next audio chunk to trigger reconnection
+      console.warn('⚠️ Server error received, will not auto-reconnect. Next audio chunk will trigger reconnection.');
     } else if (message.type === 'input_audio_buffer.speech_started') {
       console.log('🎤 Speech detected');
     } else if (message.type === 'input_audio_buffer.speech_stopped') {
@@ -393,13 +402,65 @@ export function useOpenAIRealtime() {
 
   // Send audio data to WebSocket (defined first to avoid dependency issues)
   const sendAudioData = useCallback(async (ws: WebSocket, audioData: Int16Array) => {
+    // Validate audio data first
+    if (audioData.length === 0) {
+      console.warn('⚠️ Attempting to send empty audio data');
+      return;
+    }
+    
+    // Check for invalid values (NaN, Infinity)
+    for (let i = 0; i < audioData.length; i++) {
+      if (!isFinite(audioData[i]) || isNaN(audioData[i])) {
+        console.error(`❌ Invalid audio sample at index ${i}: ${audioData[i]}`);
+        // Replace with 0
+        audioData[i] = 0;
+      }
+    }
+    
+    // Check for silent audio (all zeros or very small values)
+    const maxValue = Math.max(...Array.from(audioData).map(Math.abs));
+    if (maxValue < 100) {
+      console.warn(`⚠️ Audio data appears to be silent or very quiet (max value: ${maxValue})`);
+      // Still send it, but log a warning
+    }
+    
+    // Additional validation: ensure all samples are within valid range
+    const minSample = Math.min(...Array.from(audioData));
+    const maxSample = Math.max(...Array.from(audioData));
+    if (minSample < -32768 || maxSample > 32767) {
+      console.error(`❌ Audio samples out of range: min=${minSample}, max=${maxSample}`);
+      // Clamp values
+      for (let i = 0; i < audioData.length; i++) {
+        audioData[i] = Math.max(-32768, Math.min(32767, audioData[i]));
+      }
+    }
+    
     // Convert Int16Array to base64
-    const buffer = new Uint8Array(audioData.buffer);
+    // OpenAI Realtime API expects PCM16 audio in little-endian byte order
+    // Int16Array is already in the correct format (little-endian on most systems)
+    // Create a view of the underlying ArrayBuffer as Uint8Array
+    const buffer = new Uint8Array(audioData.buffer, audioData.byteOffset, audioData.byteLength);
+    
+    // Convert to base64 - OpenAI expects raw PCM16 bytes as base64
+    // Use a simpler, more direct approach
+    // Convert Uint8Array to base64 using the standard method
     let binaryString = '';
-    for (let i = 0; i < buffer.length; i++) {
-      binaryString += String.fromCharCode(buffer[i]);
+    const chunkSize = 8192;
+    for (let i = 0; i < buffer.length; i += chunkSize) {
+      const chunk = buffer.slice(i, Math.min(i + chunkSize, buffer.length));
+      // Convert chunk to binary string
+      for (let j = 0; j < chunk.length; j++) {
+        binaryString += String.fromCharCode(chunk[j]);
+      }
     }
     const base64Audio = btoa(binaryString);
+    
+    // Debug: Log first few bytes to verify format
+    if (audioData.length > 0) {
+      const firstSample = audioData[0];
+      const firstBytes = buffer.slice(0, 2);
+      console.log(`🔍 Audio format check - First sample: ${firstSample}, First bytes: [${firstBytes[0]}, ${firstBytes[1]}]`);
+    }
 
     const audioMessage = {
       type: 'input_audio_buffer.append',
@@ -468,8 +529,10 @@ export function useOpenAIRealtime() {
       // Ensure WebSocket is connected
       let ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.log('WebSocket not ready, initializing...');
+        console.log('🔌 WebSocket not ready, initializing...');
+        console.log('   Current WebSocket state:', ws?.readyState, ws ? 'exists' : 'null');
         ws = await initWebSocket();
+        console.log('✅ WebSocket initialized, state:', ws.readyState);
         // Wait for session to be ready
         let waitCount = 0;
         while (!sessionReadyRef.current && waitCount < 20) {
@@ -479,6 +542,7 @@ export function useOpenAIRealtime() {
         if (!sessionReadyRef.current) {
           console.warn('⚠️ Session not ready after waiting, queueing audio');
           pendingAudioRef.current.push(audioData);
+          console.log(`   Queued audio, total queued: ${pendingAudioRef.current.length} chunks`);
           return null;
         }
       }
@@ -487,19 +551,24 @@ export function useOpenAIRealtime() {
       if (!sessionReadyRef.current) {
         console.log('⏳ Session not ready yet, queueing audio...');
         pendingAudioRef.current.push(audioData);
+        console.log(`   Queued audio, total queued: ${pendingAudioRef.current.length} chunks`);
         return null;
       }
       
       // Session is ready, send audio
+      console.log('🎤 Sending audio data, WebSocket state:', ws.readyState);
       await sendAudioData(ws, audioData);
+      console.log('✅ Audio sent successfully');
       
       // Return current transcription and response
-      return {
+      const result = {
         transcription: transcriptionRef.current,
         response: responseRef.current,
       };
+      console.log('📊 Current state - transcription length:', result.transcription.length, 'response length:', result.response.length);
+      return result;
     } catch (error) {
-      console.error('AI processing error:', error);
+      console.error('❌ AI processing error:', error);
       setIsProcessing(false);
       return null;
     }
@@ -524,18 +593,39 @@ export function useOpenAIRealtime() {
       return;
     }
     
-    // First, commit the audio buffer to indicate we're done sending audio
+    // With server VAD, we don't need to manually commit
+    // The server will automatically detect speech and create responses
+    // However, we can still trigger a response if needed
+    // For now, let's try without commit and see if it works better
+    
+    // Note: With server_vad, commit might not be necessary
+    // But we'll try a different approach: only commit if we haven't sent audio recently
+    // For now, let's skip commit and let server VAD handle it
+    
+    // Create response directly (server VAD should handle speech detection)
+    // Double-check session is still ready
+    if (!sessionReadyRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('⚠️ Session no longer ready, skipping response creation');
+      return;
+    }
+    
+    // With server VAD, we might not need to manually create response
+    // The server should automatically create responses when it detects speech
+    // But we can still try to create a response if needed
+    console.log('📤 Server VAD should handle response creation automatically');
+    
+    // Try committing first (even with server VAD, this might help)
     try {
       ws.send(JSON.stringify({
         type: 'input_audio_buffer.commit',
       }));
-      console.log('📤 Committed audio buffer');
+      console.log('📤 Committed audio buffer (with server VAD, this may not be necessary)');
     } catch (error) {
       console.error('❌ Error committing audio buffer:', error);
       return;
     }
     
-    // Then create response
+    // Then create response after a short delay
     setTimeout(() => {
       // Double-check session is still ready
       if (!sessionReadyRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -556,7 +646,7 @@ export function useOpenAIRealtime() {
       } catch (error) {
         console.error('❌ Error creating response:', error);
       }
-    }, 100); // Small delay after commit
+    }, 500);
   }, []);
 
   // Cleanup WebSocket connection

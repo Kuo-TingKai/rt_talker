@@ -45,9 +45,22 @@
 ## 進行中/待解決問題 ⚠️
 
 ### 1. OpenAI Realtime API 連接問題
-- ⚠️ **問題**：連接後收到 `server_error`，WebSocket 立即關閉
+- ⚠️ **問題**：發送第一個音訊 chunk 後立即收到 `server_error`，WebSocket 立即關閉
 - ⚠️ **錯誤訊息**：`The server had an error while processing your request`
 - ⚠️ **影響**：無法正常接收轉錄和 AI 回應
+- ⚠️ **已嘗試的解決方案**：
+  - ✅ 改進 session 初始化邏輯（兩步初始化，檢查 audio modality）
+  - ✅ 增加初始化延遲（從 2 秒增加到 6 秒）
+  - ✅ 實現音訊隊列機制
+  - ✅ 加強音訊數據驗證（NaN、Infinity、範圍檢查）
+  - ✅ 改進 base64 編碼方式
+  - ✅ 移除空 commit
+  - ✅ 調整音訊發送策略
+- ⚠️ **當前狀態**：問題持續存在，可能是 OpenAI Realtime API 的已知問題（Beta 階段）
+- ⚠️ **建議**：
+  - 聯繫 OpenAI 支援，提供 session ID 和詳細錯誤日誌
+  - 檢查 OpenAI Status Page 是否有已知問題
+  - 考慮使用不同的音訊格式或發送策略
 - ⚠️ **可能原因**：
   - OpenAI Realtime API 的認證方式不正確
   - 音訊格式或參數設定有誤
