@@ -182,6 +182,12 @@ export function VoiceConversation() {
         if (now - lastProcessTime >= PROCESS_INTERVAL && audioBuffer.length > 0) {
           lastProcessTime = now;
           
+          // Limit buffer size to prevent memory issues
+          if (audioBuffer.length > MAX_AUDIO_BUFFER_SIZE) {
+            console.warn(`⚠️ Audio buffer too large (${audioBuffer.length}), keeping only last ${MAX_AUDIO_BUFFER_SIZE} chunks`);
+            audioBuffer = audioBuffer.slice(-MAX_AUDIO_BUFFER_SIZE);
+          }
+          
           // Combine audio chunks
           const totalLength = audioBuffer.reduce((sum, arr) => sum + arr.length, 0);
           const combined = new Int16Array(totalLength);
@@ -190,7 +196,7 @@ export function VoiceConversation() {
             combined.set(chunk, offset);
             offset += chunk.length;
           }
-          audioBuffer = [];
+          audioBuffer = []; // Clear buffer after processing
           
           // Track total audio sent (in milliseconds, assuming 24kHz)
           const audioDurationMs = (combined.length / 24000) * 1000;

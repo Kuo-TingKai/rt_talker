@@ -514,10 +514,20 @@ export function useOpenAIRealtime() {
 
   // Cleanup WebSocket connection
   const cleanup = useCallback(() => {
+    // Clear any pending timeouts
+    if (wsRef.current && (wsRef.current as any)._addAudioTimeout) {
+      clearTimeout((wsRef.current as any)._addAudioTimeout);
+    }
+    
     if (wsRef.current) {
-      wsRef.current.close(1000, 'User requested disconnect');
+      // Only close if not already closed
+      if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+        wsRef.current.close(1000, 'User requested disconnect');
+      }
       wsRef.current = null;
     }
+    
+    // Clear all refs and state
     transcriptionRef.current = '';
     responseRef.current = '';
     sessionReadyRef.current = false;
