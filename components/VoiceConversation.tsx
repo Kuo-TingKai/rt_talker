@@ -18,6 +18,9 @@ export function VoiceConversation() {
 
   const roomRef = useRef<Room | null>(null);
   const localAudioTrackRef = useRef<LocalAudioTrack | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const isProcessingRef = useRef<boolean>(false);
   const { 
     processAudioWithAI, 
     triggerResponse,
@@ -42,11 +45,14 @@ export function VoiceConversation() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      disconnect();
+      // Only disconnect if actually connected
+      if (connectionState !== 'disconnected' || roomRef.current) {
+        disconnect();
+      }
       cleanupAI();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanupAI]);
+  }, [cleanupAI, connectionState]);
 
   const connect = async () => {
     try {
@@ -154,13 +160,25 @@ export function VoiceConversation() {
 
   const processAudioStream = async (stream: MediaStream) => {
     try {
+      // Stop any existing audio processing
+      if (audioProcessorRef.current) {
+        audioProcessorRef.current.disconnect();
+        audioProcessorRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+      }
+      
       // OpenAI Realtime API expects 24kHz sample rate
       const audioContext = new AudioContext({ sampleRate: 24000 });
+      audioContextRef.current = audioContext;
       const source = audioContext.createMediaStreamSource(stream);
       
       // Use smaller buffer size to reduce latency and avoid large chunks
       // 4096 samples at 24kHz = ~170ms of audio
       const processor = audioContext.createScriptProcessor(2048, 1, 1);
+      audioProcessorRef.current = processor;
+      isProcessingRef.current = true;
 
       // Accumulate audio data and process in batches
       let audioBuffer: Int16Array[] = [];
@@ -174,6 +192,11 @@ export function VoiceConversation() {
       const MAX_AUDIO_BUFFER_SIZE = 10; // Limit buffer size to prevent memory issues
 
       processor.onaudioprocess = async (e) => {
+        // Check if we should continue processing
+        if (!isProcessingRef.current || connectionState === 'disconnected' || !roomRef.current) {
+          return;
+        }
+        
         const inputData = e.inputBuffer.getChannelData(0);
         const pcm16 = convertFloat32ToPCM16(inputData);
         audioBuffer.push(pcm16);
@@ -239,6 +262,7 @@ export function VoiceConversation() {
       processor.connect(audioContext.destination);
     } catch (err) {
       console.error('Audio processing error:', err);
+      isProcessingRef.current = false;
     }
   };
 
@@ -256,6 +280,11 @@ export function VoiceConversation() {
   };
 
   const disconnect = async () => {
+    // Skip if already disconnected
+    if (connectionState === 'disconnected' && !roomRef.current) {
+      return;
+    }
+    
     try {
       // Wait a bit to ensure any pending responses are received
       console.log('Disconnecting... Waiting for final responses...');
@@ -269,6 +298,19 @@ export function VoiceConversation() {
       }
       if (finalResponse) {
         setAiResponse(finalResponse);
+      }
+
+      // Stop audio processing first
+      isProcessingRef.current = false;
+      
+      if (audioProcessorRef.current) {
+        audioProcessorRef.current.disconnect();
+        audioProcessorRef.current = null;
+      }
+      
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+        audioContextRef.current = null;
       }
 
       // Wait a moment for any final updates

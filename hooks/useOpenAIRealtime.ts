@@ -32,6 +32,7 @@ export function useOpenAIRealtime() {
   const sessionReadyRef = useRef<boolean>(false);
   const pendingAudioRef = useRef<Int16Array[]>([]);
   const processPendingAudioRef = useRef<(() => Promise<void>) | null>(null);
+  const triggerResponseRef = useRef<(() => void) | null>(null);
   const reconnectAttemptsRef = useRef<number>(0);
   const maxReconnectAttempts = 3;
 
@@ -97,6 +98,7 @@ export function useOpenAIRealtime() {
         setTimeout(() => {
           sessionReadyRef.current = true;
           console.log('✅ Session is now ready for audio (after initialization delay)');
+          
           // Process any pending audio after session is confirmed ready
           // Add additional delay before processing to ensure everything is ready
           setTimeout(() => {
@@ -104,7 +106,23 @@ export function useOpenAIRealtime() {
               console.log('📤 Processing pending audio chunks from session.created');
               processPendingAudioRef.current();
             }
-          }, 500); // Additional 500ms delay before processing pending audio
+            
+            // Check if there's a pending response trigger after processing audio
+            // Wait longer to ensure audio processing is complete before triggering response
+            const ws = wsRef.current;
+            if (ws && (ws as any)._pendingResponseTrigger && triggerResponseRef.current) {
+              (ws as any)._pendingResponseTrigger = false;
+              console.log('📤 Processing pending response trigger now that session is ready');
+              setTimeout(() => {
+                // Double-check session is still ready before triggering
+                if (sessionReadyRef.current && ws && ws.readyState === WebSocket.OPEN) {
+                  triggerResponseRef.current?.();
+                } else {
+                  console.warn('⚠️ Session no longer ready, skipping pending response trigger');
+                }
+              }, 1000); // Increased delay to 1 second to ensure audio is fully processed
+            }
+          }, 1000); // Increased delay to 1 second before processing pending audio
         }, 2000); // Increased delay to 2 seconds for full initialization
       } else {
         console.log('⏳ Audio modality not in session.created, waiting for Step 2...');
@@ -125,7 +143,17 @@ export function useOpenAIRealtime() {
             console.log('📤 Processing pending audio chunks from session.updated');
             processPendingAudioRef.current();
           }
-        }, 100);
+          
+          // Check if there's a pending response trigger after processing audio
+          const ws = wsRef.current;
+          if (ws && (ws as any)._pendingResponseTrigger && triggerResponseRef.current) {
+            (ws as any)._pendingResponseTrigger = false;
+            console.log('📤 Processing pending response trigger now that session is ready');
+            setTimeout(() => {
+              triggerResponseRef.current?.();
+            }, 300); // Small delay before triggering response
+          }
+        }, 500); // Increased delay to ensure audio processing is complete
       } else {
         console.log('⏳ Session updated but audio modality not yet added');
       }
@@ -480,36 +508,55 @@ export function useOpenAIRealtime() {
   // Trigger response generation (call this after sending audio)
   const triggerResponse = useCallback(() => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      // First, commit the audio buffer to indicate we're done sending audio
-      try {
-        ws.send(JSON.stringify({
-          type: 'input_audio_buffer.commit',
-        }));
-        console.log('📤 Committed audio buffer');
-      } catch (error) {
-        console.error('❌ Error committing audio buffer:', error);
+    
+    // Check if WebSocket is open
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('⚠️ Cannot trigger response: WebSocket not ready. State:', ws?.readyState);
+      return;
+    }
+    
+    // Check if session is ready for audio
+    if (!sessionReadyRef.current) {
+      console.warn('⚠️ Cannot trigger response: Session not ready yet. Waiting for session initialization...');
+      // Queue the response trigger to be called once session is ready
+      // We'll use a flag to track if we need to trigger response after session becomes ready
+      (ws as any)._pendingResponseTrigger = true;
+      return;
+    }
+    
+    // First, commit the audio buffer to indicate we're done sending audio
+    try {
+      ws.send(JSON.stringify({
+        type: 'input_audio_buffer.commit',
+      }));
+      console.log('📤 Committed audio buffer');
+    } catch (error) {
+      console.error('❌ Error committing audio buffer:', error);
+      return;
+    }
+    
+    // Then create response
+    setTimeout(() => {
+      // Double-check session is still ready
+      if (!sessionReadyRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('⚠️ Session no longer ready, skipping response creation');
+        return;
       }
       
-      // Then create response
-      setTimeout(() => {
-        const responseMessage = {
-          type: 'response.create',
-          response: {
-            modalities: ['text', 'audio'],
-          },
-        };
-        
-        console.log('📤 Triggering response generation');
-        try {
-          ws.send(JSON.stringify(responseMessage));
-        } catch (error) {
-          console.error('❌ Error creating response:', error);
-        }
-      }, 100); // Small delay after commit
-    } else {
-      console.warn('⚠️ Cannot trigger response: WebSocket not ready. State:', ws?.readyState);
-    }
+      const responseMessage = {
+        type: 'response.create',
+        response: {
+          modalities: ['text', 'audio'],
+        },
+      };
+      
+      console.log('📤 Triggering response generation');
+      try {
+        ws.send(JSON.stringify(responseMessage));
+      } catch (error) {
+        console.error('❌ Error creating response:', error);
+      }
+    }, 100); // Small delay after commit
   }, []);
 
   // Cleanup WebSocket connection
@@ -552,6 +599,9 @@ export function useOpenAIRealtime() {
     }
   }, [initWebSocket, cleanup]);
 
+  // Store triggerResponse in ref for use in handleRealtimeMessage
+  triggerResponseRef.current = triggerResponse;
+  
   return {
     processAudioWithAI,
     triggerResponse,
