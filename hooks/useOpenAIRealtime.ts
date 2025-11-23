@@ -23,6 +23,8 @@ interface RealtimeMessage {
 
 export function useOpenAIRealtime() {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptionRef = useRef<string>('');
   const responseRef = useRef<string>('');
@@ -30,6 +32,8 @@ export function useOpenAIRealtime() {
   const sessionReadyRef = useRef<boolean>(false);
   const pendingAudioRef = useRef<Int16Array[]>([]);
   const processPendingAudioRef = useRef<(() => Promise<void>) | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const maxReconnectAttempts = 3;
 
   // Set callback to update UI
   const setUpdateCallback = useCallback((callback: (transcription: string, response: string) => void) => {
@@ -127,9 +131,12 @@ export function useOpenAIRealtime() {
       }
     } else if (message.type === 'error') {
       const errorDetails = (message as any).error;
+      const errorType = errorDetails?.type || 'unknown_error';
+      const errorMessage = errorDetails?.message || 'An unknown error occurred';
+      
       console.error('❌ OpenAI Realtime API error:', {
-        type: errorDetails?.type,
-        message: errorDetails?.message,
+        type: errorType,
+        message: errorMessage,
         code: errorDetails?.code,
         param: errorDetails?.param,
         fullError: errorDetails,
@@ -137,6 +144,22 @@ export function useOpenAIRealtime() {
       
       // Log the full message for debugging
       console.error('Full error message:', JSON.stringify(message, null, 2));
+      
+      // Set user-friendly error message
+      let userFriendlyMessage = 'An error occurred while processing your request.';
+      
+      if (errorType === 'server_error') {
+        userFriendlyMessage = 'OpenAI server encountered an error. This may be a temporary issue. Please try again.';
+      } else if (errorType === 'invalid_request_error') {
+        userFriendlyMessage = 'Invalid request. Please check your configuration.';
+      } else if (errorType === 'authentication_error') {
+        userFriendlyMessage = 'Authentication failed. Please check your API key.';
+      } else if (errorType === 'rate_limit_error') {
+        userFriendlyMessage = 'Rate limit exceeded. Please wait a moment and try again.';
+      }
+      
+      setError(userFriendlyMessage);
+      setConnectionStatus('disconnected');
     } else if (message.type === 'input_audio_buffer.speech_started') {
       console.log('🎤 Speech detected');
     } else if (message.type === 'input_audio_buffer.speech_stopped') {
@@ -159,7 +182,9 @@ export function useOpenAIRealtime() {
     return new Promise((resolve, reject) => {
       const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
       if (!apiKey) {
-        reject(new Error('OpenAI API key not found'));
+        const errorMsg = 'OpenAI API key not found. Please check your environment variables.';
+        setError(errorMsg);
+        reject(new Error(errorMsg));
         return;
       }
 
@@ -168,6 +193,8 @@ export function useOpenAIRealtime() {
       const wsUrl = `ws://localhost:3001/api/openai-realtime`;
       
       console.log('Connecting to OpenAI Realtime API via backend proxy...');
+      setConnectionStatus('connecting');
+      setError(null);
       
       const ws = new WebSocket(wsUrl);
 
@@ -182,6 +209,9 @@ export function useOpenAIRealtime() {
       ws.onopen = () => {
         clearTimeout(connectionTimeout);
         console.log('✅ OpenAI Realtime API WebSocket connected');
+        setConnectionStatus('connected');
+        setError(null);
+        reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
         
         // Wait a moment before sending session.update
         // Some WebSocket implementations need a brief delay
@@ -250,6 +280,8 @@ export function useOpenAIRealtime() {
       ws.onerror = (error) => {
         clearTimeout(connectionTimeout);
         console.error('WebSocket error:', error);
+        setError('Connection error occurred. Please try again.');
+        setConnectionStatus('disconnected');
         // Don't reject immediately, let onclose handle it
       };
 
@@ -299,9 +331,33 @@ export function useOpenAIRealtime() {
         }
         console.log('WebSocket closed', event.code, event.reason);
         wsRef.current = null;
-        // Only reject if we haven't resolved yet
-        if (ws.readyState !== WebSocket.CLOSED || event.code !== 1000) {
+        setConnectionStatus('disconnected');
+        sessionReadyRef.current = false; // Reset session ready state
+        pendingAudioRef.current = []; // Clear pending audio
+        
+        // Handle unexpected disconnections
+        if (event.code !== 1000) {
           // Connection closed unexpectedly
+          if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+            reconnectAttemptsRef.current++;
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 10000); // Exponential backoff, max 10s
+            console.log(`🔄 Attempting to reconnect (${reconnectAttemptsRef.current}/${maxReconnectAttempts}) in ${delay}ms...`);
+            setError(`Connection lost. Reconnecting... (${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
+            
+            setTimeout(() => {
+              if (wsRef.current === null) { // Only reconnect if not already connected
+                setConnectionStatus('connecting');
+                initWebSocket().catch((err) => {
+                  console.error('Reconnection failed:', err);
+                  if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+                    setError('Failed to reconnect. Please try again manually.');
+                  }
+                });
+              }
+            }, delay);
+          } else {
+            setError('Connection failed after multiple attempts. Please try again.');
+          }
         }
       };
     });
@@ -459,7 +515,7 @@ export function useOpenAIRealtime() {
   // Cleanup WebSocket connection
   const cleanup = useCallback(() => {
     if (wsRef.current) {
-      wsRef.current.close();
+      wsRef.current.close(1000, 'User requested disconnect');
       wsRef.current = null;
     }
     transcriptionRef.current = '';
@@ -467,12 +523,32 @@ export function useOpenAIRealtime() {
     sessionReadyRef.current = false;
     pendingAudioRef.current = [];
     setIsProcessing(false);
+    setConnectionStatus('disconnected');
+    reconnectAttemptsRef.current = 0;
+    setError(null);
   }, []);
+  
+  // Manual retry function
+  const retry = useCallback(async () => {
+    reconnectAttemptsRef.current = 0;
+    setError(null);
+    cleanup();
+    await new Promise(resolve => setTimeout(resolve, 500)); // Small delay before retry
+    try {
+      await initWebSocket();
+    } catch (error) {
+      console.error('Retry failed:', error);
+      setError('Failed to reconnect. Please check your connection and try again.');
+    }
+  }, [initWebSocket, cleanup]);
 
   return {
     processAudioWithAI,
     triggerResponse,
     isProcessing,
+    error,
+    connectionStatus,
+    retry,
     cleanup,
     setUpdateCallback,
     getCurrentTranscription: () => transcriptionRef.current,

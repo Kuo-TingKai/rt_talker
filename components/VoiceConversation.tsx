@@ -21,7 +21,10 @@ export function VoiceConversation() {
   const { 
     processAudioWithAI, 
     triggerResponse,
-    isProcessing, 
+    isProcessing,
+    error: aiError,
+    connectionStatus: aiConnectionStatus,
+    retry: retryAI,
     cleanup: cleanupAI,
     setUpdateCallback,
     getCurrentTranscription,
@@ -290,9 +293,25 @@ export function VoiceConversation() {
         
         <ConnectionStatus state={connectionState} />
         
-        {error && (
+        {/* AI Connection Status */}
+        {aiConnectionStatus !== 'disconnected' && (
+          <div className="ai-connection-status">
+            <div className={`status-indicator ${aiConnectionStatus}`} />
+            <span className="status-text">
+              AI: {aiConnectionStatus === 'connecting' ? 'Connecting...' : aiConnectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
+            </span>
+          </div>
+        )}
+        
+        {/* Error Messages */}
+        {(error || aiError) && (
           <div className="error-message">
-            <p>Error: {error}</p>
+            <p><strong>Error:</strong> {error || aiError}</p>
+            {aiError && (
+              <button onClick={retryAI} className="retry-button">
+                Retry Connection
+              </button>
+            )}
           </div>
         )}
 
@@ -329,9 +348,13 @@ export function VoiceConversation() {
           )}
         </div>
 
-        {isProcessing && (
+        {/* Loading and Processing Indicators */}
+        {(isProcessing || aiConnectionStatus === 'connecting') && (
           <div className="processing-indicator">
-            <p>AI is processing...</p>
+            <div className="spinner" />
+            <p>
+              {aiConnectionStatus === 'connecting' ? 'Connecting to AI...' : 'AI is processing...'}
+            </p>
           </div>
         )}
       </div>
@@ -364,6 +387,67 @@ export function VoiceConversation() {
           padding: 12px;
           margin: 16px 0;
           color: #c33;
+        }
+
+        .error-message p {
+          margin: 0 0 8px 0;
+        }
+
+        .retry-button {
+          background: #667eea;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          padding: 8px 16px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          margin-top: 8px;
+          transition: background 0.2s;
+        }
+
+        .retry-button:hover {
+          background: #5568d3;
+        }
+
+        .retry-button:active {
+          background: #4457c2;
+        }
+
+        .ai-connection-status {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          margin-bottom: 16px;
+          padding: 8px 12px;
+          background: #f8f9fa;
+          border-radius: 8px;
+          font-size: 13px;
+        }
+
+        .ai-connection-status .status-indicator {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+
+        .ai-connection-status .status-indicator.connecting {
+          background: #f59e0b;
+          animation: pulse 2s infinite;
+        }
+
+        .ai-connection-status .status-indicator.connected {
+          background: #10b981;
+        }
+
+        .ai-connection-status .status-indicator.disconnected {
+          background: #ef4444;
+        }
+
+        .ai-connection-status .status-text {
+          font-weight: 500;
+          color: #666;
         }
 
         .conversation-display {
@@ -402,6 +486,25 @@ export function VoiceConversation() {
           text-align: center;
           color: #667eea;
           font-style: italic;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .spinner {
+          width: 16px;
+          height: 16px;
+          border: 2px solid #667eea;
+          border-top-color: transparent;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
         }
       `}</style>
     </div>
