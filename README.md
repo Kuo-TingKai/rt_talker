@@ -5,7 +5,8 @@ A minimal web application that enables real-time voice conversations using LiveK
 ## Features
 
 - 🎤 Real-time voice conversation using LiveKit
-- 🤖 AI-powered responses using OpenAI Realtime API
+- 🎙️ Speech transcription using OpenAI Whisper API
+- 🤖 AI-powered responses using OpenAI Chat API
 - 📱 Clean, modern UI with connection status indicators
 - 🔄 Real-time transcription and AI response display
 - 🎯 TypeScript for type safety
@@ -16,14 +17,14 @@ A minimal web application that enables real-time voice conversations using LiveK
 - **Frontend**: Next.js 14, React 18, TypeScript
 - **Backend**: Node.js, Express
 - **Real-time Communication**: LiveKit SDK
-- **AI Service**: OpenAI Realtime API
+- **AI Service**: OpenAI Whisper API (transcription) + Chat API (conversation)
 - **Styling**: CSS-in-JS (styled-jsx)
 
 ## Prerequisites
 
 - Node.js 18+ and npm/yarn
 - LiveKit account (free tier available at [livekit.io](https://livekit.io))
-- OpenAI API key with access to Realtime API
+- OpenAI API key with access to Whisper API and Chat API
 
 ## Setup Instructions
 
@@ -66,7 +67,7 @@ PORT=3001
 1. Sign up at [platform.openai.com](https://platform.openai.com)
 2. Navigate to API Keys section
 3. Create a new API key
-4. Ensure you have access to the Realtime API (may require waitlist)
+4. Ensure you have access to Whisper API and Chat API (standard OpenAI API access)
 
 ### 4. Run the Application
 
@@ -110,7 +111,8 @@ rt_talker/
 │   ├── ConversationControls.tsx # Start/End buttons
 │   └── MicrophoneStatus.tsx     # Microphone status indicator
 ├── hooks/                 # Custom React hooks
-│   └── useOpenAIRealtime.ts    # OpenAI Realtime API integration
+│   ├── useOpenAIRealtime.ts    # OpenAI Realtime API integration (legacy)
+│   └── useOpenAIWhisperChat.ts # Whisper + Chat API integration
 ├── server/               # Backend server
 │   └── index.js          # Express server for token generation
 ├── package.json          # Dependencies and scripts
@@ -136,9 +138,10 @@ rt_talker/
 - **Adaptive Streaming**: Enabled adaptive streaming for better performance
 
 ### AI Integration
-- **OpenAI Realtime API**: Using OpenAI's Realtime API for voice-to-voice conversation
-- **WebSocket Connection**: Maintaining persistent WebSocket connection for real-time audio processing
-- **PCM16 Audio Format**: Using PCM16 format for audio encoding/decoding
+- **OpenAI Whisper API**: Using Whisper API for accurate speech-to-text transcription
+- **OpenAI Chat API**: Using Chat API for contextual, natural language responses
+- **MediaRecorder API**: Capturing audio in WebM format for reliable processing
+- **OpenAI SDK**: Using official OpenAI SDK for seamless API integration
 
 ## Troubleshooting
 
@@ -154,8 +157,9 @@ rt_talker/
 
 ### AI Not Responding
 - Verify your OpenAI API key is set correctly
-- Check that you have access to the Realtime API
+- Check that you have access to Whisper API and Chat API
 - Review browser console for API errors
+- Ensure the backend server is running and accessible
 
 ### Port Already in Use
 - Change the `PORT` in `.env` if 3001 is already in use
@@ -164,9 +168,10 @@ rt_talker/
 ## Development Notes
 
 - The application uses LiveKit's free tier for development
-- OpenAI Realtime API may require waitlist access
+- OpenAI Whisper API and Chat API are available with standard API access
+- Audio is processed every 3 seconds for optimal balance between responsiveness and API efficiency
 - For production, consider implementing proper error boundaries and loading states
-- Audio processing happens client-side; consider server-side processing for production
+- The application maintains conversation context throughout the session
 
 ## License
 

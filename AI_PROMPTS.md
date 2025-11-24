@@ -12,7 +12,7 @@ This document describes the AI tools used during the development of this project
 
 **Prompt:**
 ```
-根據此take home程式面試作業的敘述建構此專案
+Build this project based on the take-home programming interview assignment description
 
 [Full project requirements provided]
 ```
@@ -33,8 +33,8 @@ This document describes the AI tools used during the development of this project
 
 **Prompt:**
 ```
-建立後端服務 (Node.js/Express) 用於生成 LiveKit tokens
-整合 LiveKit 客戶端 SDK 與音訊處理
+Create backend service (Node.js/Express) for generating LiveKit tokens
+Integrate LiveKit client SDK with audio processing
 ```
 
 **What it accomplished:**
@@ -54,7 +54,7 @@ This document describes the AI tools used during the development of this project
 
 **Prompt:**
 ```
-整合 OpenAI Realtime API 進行 AI 語音對話
+Integrate OpenAI Realtime API for AI voice conversation
 ```
 
 **What it accomplished:**
@@ -78,7 +78,7 @@ This document describes the AI tools used during the development of this project
 
 **Prompt:**
 ```
-建立前端 UI 組件 (按鈕、狀態指示器等)
+Create frontend UI components (buttons, status indicators, etc.)
 ```
 
 **What it accomplished:**
@@ -97,7 +97,7 @@ This document describes the AI tools used during the development of this project
 
 **Prompt:**
 ```
-處理基本錯誤情況
+Handle basic error cases
 ```
 
 **What it accomplished:**
@@ -149,148 +149,148 @@ How to integrate OpenAI Realtime API with WebSocket for voice conversation
 
 ---
 
-### 6. Port 配置和伺服器管理
+### 6. Port Configuration and Server Management
 
 **Prompt:**
 ```
-現在port 3000被其他服務佔用請使用別的port
+Port 3000 is currently occupied by another service, please use a different port
 ```
 
 **What it accomplished:**
-- 將前端 port 從 3000 改為 3003
-- 更新所有相關文件中的 port 說明
-- 修正後端伺服器的 port 配置問題
+- Changed frontend port from 3000 to 3003
+- Updated port descriptions in all related files
+- Fixed backend server port configuration issues
 
 **Why it worked well:**
-- 明確的問題描述讓 AI 能快速定位並修正
+- Clear problem description allowed AI to quickly locate and fix the issue
 
 ---
 
-### 7. LiveKit 憑證設定
+### 7. LiveKit Credentials Setup
 
 **Prompt:**
 ```
-GUI顯示disconnected 後端可能需要livekit憑證 請告訴我怎麼取得livekit憑證
+GUI shows disconnected, backend may need LiveKit credentials. Please tell me how to obtain LiveKit credentials
 ```
 
 **What it accomplished:**
-- 建立詳細的 LiveKit 憑證取得指南 (`LIVEKIT_SETUP_GUIDE.md`)
-- 提供逐步操作說明
-- 包含常見問題解答
+- Created detailed LiveKit credentials acquisition guide (`LIVEKIT_SETUP_GUIDE.md`)
+- Provided step-by-step instructions
+- Included common questions and answers
 
 **Why it worked well:**
-- 用戶提供了具體的問題描述，AI 能針對性地提供解決方案
+- User provided specific problem description, allowing AI to provide targeted solutions
 
 ---
 
-### 8. OpenAI API 驗證和測試
+### 8. OpenAI API Verification and Testing
 
 **Prompt:**
 ```
-已經更新.env檔案 幫我確認是否可以使用realtime API了 請幫我執行:
-- 重新啟動開發伺服器
-- 測試應用程式
+I've updated the .env file. Please help me verify if the realtime API can be used now. Please help me execute:
+- Restart the development server
+- Test the application
 ```
 
 **What it accomplished:**
-- 建立 OpenAI API 測試腳本 (`scripts/test-openai.js`)
-- 驗證 API key 有效性
-- 測試 Realtime API 連接
-- 自動化伺服器啟動流程
+- Created OpenAI API test script (`scripts/test-openai.js`)
+- Verified API key validity
+- Tested Realtime API connection
+- Automated server startup process
 
 **Why it worked well:**
-- 明確的任務列表讓 AI 能系統性地完成所有步驟
+- Clear task list allowed AI to systematically complete all steps
 
 ---
 
-### 9. 麥克風啟用錯誤修正
+### 9. Microphone Activation Error Fix
 
 **Prompt:**
 ```
-遭遇以下錯誤
+Encountered the following error
 [TypeError: Cannot read properties of undefined (reading 'values')]
 ```
 
 **What it accomplished:**
-- 修正 LiveKit audioTracks API 使用方式
-- 改用正確的 `audioTrackPublications` API
-- 添加 fallback 機制（使用 getUserMedia）
-- 改進錯誤處理
+- Fixed LiveKit audioTracks API usage
+- Switched to correct `audioTrackPublications` API
+- Added fallback mechanism (using getUserMedia)
+- Improved error handling
 
 **Why it worked well:**
-- 具體的錯誤訊息讓 AI 能快速定位問題
-- 提供了完整的錯誤上下文
+- Specific error message allowed AI to quickly locate the issue
+- Provided complete error context
 
 ---
 
-### 10. WebSocket 代理和 Blob 處理
+### 10. WebSocket Proxy and Blob Handling
 
 **Prompt:**
 ```
-看起來還是報錯
+Still getting an error
 [SyntaxError: Unexpected token 'o', "[object Blob]" is not valid JSON]
 ```
 
 **What it accomplished:**
-- 建立後端 WebSocket 代理伺服器
-- 處理瀏覽器無法設置 Authorization header 的問題
-- 修正 Blob/ArrayBuffer 到字串的轉換
-- 改進訊息解析邏輯
+- Created backend WebSocket proxy server
+- Handled browser's inability to set Authorization header
+- Fixed Blob/ArrayBuffer to string conversion
+- Improved message parsing logic
 
 **Why it worked well:**
-- 錯誤訊息明確指出了問題類型（Blob vs JSON）
-- AI 能理解 WebSocket 在瀏覽器中的限制
+- Error message clearly indicated the problem type (Blob vs JSON)
+- AI understood WebSocket limitations in browsers
 
 ---
 
-### 11. 音訊處理和結果顯示優化
+### 11. Audio Processing and Result Display Optimization
 
 **Prompt:**
 ```
-還是沒有我講話的結果
-還是因為我講完錄音之後 在分析結果出來之前 太早關掉對話了 導致結果顯示不出來?
+Still no results from my speech
+Is it because I closed the conversation too early after finishing recording, before the analysis results came out, causing the results not to be displayed?
 ```
 
 **What it accomplished:**
-- 改進音訊處理時機（批量處理，每 1-2 秒）
-- 分離音訊發送和回應觸發邏輯
-- 改進斷開連接時的結果保存邏輯
-- 添加 UI 更新回調機制
-- 改進錯誤日誌顯示
+- Improved audio processing timing (batch processing, every 1-2 seconds)
+- Separated audio sending and response triggering logic
+- Improved result saving logic when disconnecting
+- Added UI update callback mechanism
+- Improved error log display
 
 **Why it worked well:**
-- 用戶提供了很好的觀察（太早關閉可能導致結果丟失）
-- AI 能理解問題並提供多方面的改進
+- User provided good observation (closing too early may cause result loss)
+- AI understood the problem and provided multi-faceted improvements
 
 ---
 
-### 12. Session Ready 判斷邏輯改進
+### 12. Session Ready Logic Improvement
 
 **Prompt:**
 ```
-按下start conversation之後數秒還是報錯
+Still getting an error several seconds after pressing start conversation
 [server_error after session.created]
 ```
 
 **What it accomplished:**
-- 發現 `session.created` 已包含 `audio` modality（即使只請求 `text`）
-- 實現檢查邏輯：如果 `session.created` 已包含 `audio`，則跳過 Step 2
-- 改進 session ready 標記時機：等待 2 秒後再標記為 ready
-- 添加額外延遲：在處理 pending audio 前再等待 500ms
-- 限制 pending audio chunks：只發送最後 2 個，丟棄舊的
-- 增加 chunks 之間的延遲：從 50ms 增加到 200ms
+- Discovered that `session.created` already includes `audio` modality (even when only requesting `text`)
+- Implemented check logic: if `session.created` already includes `audio`, skip Step 2
+- Improved session ready marking timing: wait 2 seconds before marking as ready
+- Added additional delay: wait another 500ms before processing pending audio
+- Limited pending audio chunks: only send the last 2, discard old ones
+- Increased delay between chunks: from 50ms to 200ms
 
 **Why it worked well:**
-- 通過日誌分析發現了關鍵問題（session.created 已包含 audio）
-- 系統性地改進了時序和發送策略
+- Log analysis revealed the key issue (session.created already includes audio)
+- Systematically improved timing and sending strategy
 
 **Challenges:**
-- 即使改進了時序，發送音訊時仍會收到 `server_error`
-- 需要進一步調查音訊格式或 API 使用方式
+- Even after improving timing, still receiving `server_error` when sending audio
+- Need further investigation into audio format or API usage
 
 ---
 
-### 13. 音訊發送策略優化
+### 13. Audio Sending Strategy Optimization
 
 **Prompt:**
 ```
@@ -299,93 +299,93 @@ after pressing start conversation
 ```
 
 **What it accomplished:**
-- 限制一次發送的 pending audio chunks 數量（只保留最後 2 個）
-- 增加音訊 chunks 之間的延遲（從 50ms 到 200ms）
-- 添加發送前的額外延遲（200ms）
-- 改進錯誤處理：如果發送失敗則停止處理
+- Limited the number of pending audio chunks sent at once (only keep the last 2)
+- Increased delay between audio chunks (from 50ms to 200ms)
+- Added additional delay before sending (200ms)
+- Improved error handling: stop processing if sending fails
 
 **Why it worked well:**
-- 識別出發送過快可能是問題原因
-- 系統性地減緩發送速度
+- Identified that sending too fast might be the cause
+- Systematically slowed down sending speed
 
 **Current Status:**
-- 問題仍然存在，需要進一步調查
+- Issue still persists, requires further investigation
 
 ---
 
-## 當前狀態和待解決問題
+## Current Status and Pending Issues
 
-### 主要問題：OpenAI Realtime API server_error
+### Main Issue: OpenAI Realtime API server_error
 
-**問題描述：**
-- 連接 OpenAI Realtime API 後，在發送音訊數據時收到 `server_error`
-- 錯誤訊息：`The server had an error while processing your request`
-- WebSocket 連接立即關閉（code 1000）
-- 錯誤發生時機：在 `session.created` 後，發送音訊數據時立即觸發
+**Problem Description:**
+- After connecting to OpenAI Realtime API, receiving `server_error` when sending audio data
+- Error message: `The server had an error while processing your request`
+- WebSocket connection closes immediately (code 1000)
+- Error timing: triggered immediately after sending audio data, after `session.created`
 
-**已嘗試的解決方案：**
+**Attempted Solutions:**
 
-#### 1. 後端 WebSocket 代理
-- ✅ 建立後端 WebSocket 代理（解決瀏覽器無法設置 Authorization header 的問題）
-- ✅ 添加 `OpenAI-Beta: realtime=v1` header
+#### 1. Backend WebSocket Proxy
+- ✅ Created backend WebSocket proxy (solved browser's inability to set Authorization header)
+- ✅ Added `OpenAI-Beta: realtime=v1` header
 
-#### 2. 訊息處理改進
-- ✅ 修正 Blob/ArrayBuffer 到字串的轉換問題
-- ✅ 改進訊息解析邏輯
-- ✅ 添加詳細的錯誤日誌
+#### 2. Message Processing Improvements
+- ✅ Fixed Blob/ArrayBuffer to string conversion issues
+- ✅ Improved message parsing logic
+- ✅ Added detailed error logging
 
-#### 3. Session 初始化策略
-- ✅ 實現兩步初始化：先發送 `text` modality，再添加 `audio` modality
-- ✅ 發現 OpenAI 在 `session.created` 時已自動包含 `audio` modality
-- ✅ 改進邏輯：檢查 `session.created` 是否已包含 `audio`，如果包含則跳過 Step 2
+#### 3. Session Initialization Strategy
+- ✅ Implemented two-step initialization: first send `text` modality, then add `audio` modality
+- ✅ Discovered OpenAI automatically includes `audio` modality in `session.created`
+- ✅ Improved logic: check if `session.created` already includes `audio`, if so skip Step 2
 
-#### 4. 時序優化
-- ✅ 增加初始化等待時間：從 1.5 秒增加到 2 秒
-- ✅ 添加額外延遲：在處理 pending audio 前再等待 500ms
-- ✅ 限制 pending audio chunks 數量：只發送最後 2 個 chunks，丟棄舊的
-- ✅ 增加 chunks 之間的延遲：從 50ms 增加到 200ms
+#### 4. Timing Optimization
+- ✅ Increased initialization wait time: from 1.5 seconds to 2 seconds
+- ✅ Added additional delay: wait another 500ms before processing pending audio
+- ✅ Limited pending audio chunks count: only send the last 2 chunks, discard old ones
+- ✅ Increased delay between chunks: from 50ms to 200ms
 
-#### 5. 音訊發送策略
-- ✅ 實現音訊隊列機制：在 session 未準備好時將音訊加入隊列
-- ✅ 改進音訊發送頻率控制
-- ✅ 添加音訊大小檢查和警告
+#### 5. Audio Sending Strategy
+- ✅ Implemented audio queue mechanism: queue audio when session is not ready
+- ✅ Improved audio sending frequency control
+- ✅ Added audio size checks and warnings
 
-**當前觀察：**
-- `session.created` 成功，包含 `audio` 和 `text` modalities
-- 等待 2 秒後標記 session 為 ready
-- 發送音訊數據後立即收到 `server_error`
-- 錯誤發生在發送第一個或第二個音訊 chunk 時
+**Current Observations:**
+- `session.created` succeeds, includes `audio` and `text` modalities
+- Wait 2 seconds before marking session as ready
+- Immediately receive `server_error` after sending audio data
+- Error occurs when sending the first or second audio chunk
 
-**可能的原因：**
-1. **音訊格式問題**：PCM16 格式可能不正確，或音訊數據本身有問題
-2. **API 限制**：可能對音訊發送頻率或大小有限制
-3. **Session 狀態**：雖然等待了 2 秒，但 OpenAI 可能還需要更多時間來完全初始化音訊處理管道
-4. **音訊數據問題**：可能音訊數據在轉換過程中損壞
-5. **API Bug**：可能是 OpenAI Realtime API 的已知問題（Beta 階段）
+**Possible Causes:**
+1. **Audio Format Issue**: PCM16 format may be incorrect, or audio data itself has issues
+2. **API Limitations**: May have limitations on audio sending frequency or size
+3. **Session State**: Although waited 2 seconds, OpenAI may need more time to fully initialize audio processing pipeline
+4. **Audio Data Issue**: Audio data may be corrupted during conversion
+5. **API Bug**: May be a known issue with OpenAI Realtime API (Beta stage)
 
-**下一步計劃：**
-1. **檢查音訊格式**：
-   - 驗證 PCM16 轉換是否正確
-   - 檢查音訊採樣率和格式是否符合要求
-   - 嘗試發送空的音訊數據測試
+**Next Steps:**
+1. **Check Audio Format**:
+   - Verify PCM16 conversion is correct
+   - Check if audio sample rate and format meet requirements
+   - Try sending empty audio data for testing
 
-2. **簡化測試**：
-   - 嘗試只發送一個非常小的音訊 chunk
-   - 增加發送前的等待時間（3-5 秒）
-   - 檢查是否需要先發送 `input_audio_buffer.commit` 或其他初始化訊息
+2. **Simplify Testing**:
+   - Try sending only one very small audio chunk
+   - Increase wait time before sending (3-5 seconds)
+   - Check if need to send `input_audio_buffer.commit` or other initialization messages first
 
-3. **查閱官方文件**：
-   - 重新檢查 OpenAI Realtime API 官方文件
-   - 查看是否有遺漏的初始化步驟
-   - 檢查音訊發送的正確格式和時機
+3. **Review Official Documentation**:
+   - Re-check OpenAI Realtime API official documentation
+   - Check if there are missing initialization steps
+   - Verify correct format and timing for audio sending
 
-4. **聯繫支援**：
-   - 如果問題持續，使用 session ID 聯繫 OpenAI 支援
-   - 提供完整的錯誤日誌和 session ID
+4. **Contact Support**:
+   - If issue persists, contact OpenAI support with session ID
+   - Provide complete error logs and session ID
 
-5. **替代方案**：
-   - 考慮使用組合 API（Whisper + Chat Completions + TTS）
-   - 評估其他語音 API 服務
+5. **Alternative Solutions**:
+   - Consider using combined APIs (Whisper + Chat Completions + TTS)
+   - Evaluate other voice API services
 
 ---
 
